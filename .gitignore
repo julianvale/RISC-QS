@@ -1,0 +1,17 @@
+out/
+.idea/
+.bsp/
+.metals/
+.bloop/
+.vscode/
+/*.v
+/*.vhd
+*.bin
+simWorkspace
+/build/
+/bench/
+.claude
+.codex
+ext/VexiiRiscv
+BASIC_MISTAKES.md
+/src/scratch

@@ -1,0 +1,17 @@
+# systemd unit — serve the board's PynqDriver on the network at boot (docs/software/05 §3c).
+# Install on the ZCU216 PS: copy to /etc/systemd/system/, then
+#   systemctl enable --now riscq-rpc
+[Unit]
+Description=riscq SoC RPC server (Pyro5)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# adjust --ns to your name-server host, or drop it to use a direct PYRO URI
+ExecStart=/usr/bin/python3 -m riscq.remote_cli --ns %H --bitfile /opt/riscq/design.bit
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target

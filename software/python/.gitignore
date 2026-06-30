@@ -1,0 +1,10 @@
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.venv/
+sim_build/
+riscq/cosim/rtl/
+riscq/cosim/sim_build/
+riscq/cosim/rtl_examples/
+riscq/cosim/sim_build_examples/

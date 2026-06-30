@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "riscq"
+version = "0.1.0"
+description = "Control-software framework for the riscq RFSoC (host driver, program/pulse generation, remote, cosim)"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy",
+    "pyelftools",
+]
+
+[project.optional-dependencies]
+# ZCU216-only (the aarch64 PS), imported lazily by PynqDriver. Markered so uv's resolver skips them on
+# the x86_64 dev host (pynq pulls pynqmetadata from a git URL); on the board, install with pip.
+board = ["pynq; platform_machine == 'aarch64'", "xrfclk; platform_machine == 'aarch64'"]
+remote = ["Pyro5"]
+cosim = ["cocotb>=1.9,<2.0"]    # 2.0 changed the runner/handle API the cosim harness targets
+qutip = ["qutip"]               # closed-loop QuantumModel example only
+dev = ["pytest"]
+
+[dependency-groups]
+# tooling for the examples/ co-sim notebooks — the shared uv dev environment. cocotb is here too so
+# `uv run` brings the full co-sim stack by default (see [tool.uv].default-groups below).
+examples = ["cocotb>=1.9,<2.0", "matplotlib>=3.10,<3.11", "jupyterlab", "ipykernel"]   # 3.11 Agg std::bad_alloc
+
+[tool.uv]
+# Lock/resolve for the x86_64 dev host (where the co-sim + examples run). This also drops the
+# aarch64-only `board` deps from resolution, so `uv sync`/`uv run` don't choke on pynq's git URL.
+environments = ["platform_machine == 'x86_64'"]
+# install the examples tooling by default ⇒ `uv run jupyter lab examples/` just works.
+default-groups = ["examples"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["riscq*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
