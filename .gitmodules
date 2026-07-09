@@ -1,8 +1,11 @@
 [submodule "ext/SpinalHDL"]
 	path = ext/SpinalHDL
-	url = https://github.com/SpinalHDL/SpinalHDL
+	url = https://github.com/SpinalHDL/SpinalHDL.git
 	branch = v1.14.2
 [submodule "ext/rvls"]
 	path = ext/rvls
-	url = https://github.com/JunyiLiu1994/rvls.git
+	url = https://github.com/SpinalHDL/rvls.git
 	branch = riscq-machine-only-csr-stubs
+[submodule "ext/VexiiRiscv"]
+	path = ext/VexiiRiscv
+	url = https://github.com/SpinalHDL/VexiiRiscv.git
