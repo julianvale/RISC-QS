@@ -79,12 +79,6 @@ case class TimedQueueRegArray[T <: Data](
   def latency: Int = 0
 }
 
-/** Internal FIFO payload for [[TimedQueueDeadline]]: data + precomputed deadline. */
-case class TimedStored[T <: Data](dataType: HardType[T], timeWidth: Int) extends Bundle {
-  val data     = dataType()
-  val deadline = UInt(timeWidth bits)
-}
-
 /**
  * '''Deadline-precompute''' variant. Keeps the standard `StreamFifo`, but stores the precomputed
  * `deadline = startTime − lead` (a constant subtract, registered into the FIFO at push) instead of

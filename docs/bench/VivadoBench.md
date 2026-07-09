@@ -44,7 +44,7 @@ a logic-dominated one is a depth problem, and they call for different fixes.
 
 ## Configuration (environment-overridable; defaults match the riscq RFSoC target)
 
-- `RISCQ_VIVADO_BIN` — Vivado `bin` dir (default `/opt/Xilinx/Vivado/2024.2/bin`).
+- `RISCQ_VIVADO_BIN` — Vivado `bin` dir (default: the `vivado` on `PATH`).
 - `RISCQ_DEVICE` — target part (default `xczu49dr-ffvf1760-2-e`).
 - `RISCQ_FMAX_TARGET_MHZ` — the tight clock to constrain against (default 1000).
 - `RISCQ_FMAX_TOP_PATHS` — how many collapsed critical-path rows to print (default 15).

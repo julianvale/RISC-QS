@@ -13,6 +13,12 @@ import riscq.riscv.misc.PipelinePlugin
 /** The CSR-access classification signal this plugin owns and registers with the decoder. */
 object CsrPlugin extends AreaObject {
   val IS_CSR = Payload(Bool()) // a Zicsr CSRR* (SYSTEM, funct3 =/= 000)
+  // The SYSTEM env ops are pre-decoded at decodeAt (riscv-fmax E3, baked in): one key each so the
+  // jumpAt-visible trap/mret qualifier is a registered bit instead of the opcode/funct3/funct12
+  // compare cone. Bit-exact vs the old live executeAt classification (RVLS).
+  val IS_ECALL  = Payload(Bool())
+  val IS_EBREAK = Payload(Bool())
+  val IS_MRET   = Payload(Bool())
 }
 
 /**
@@ -50,11 +56,15 @@ class CsrPlugin(p: RiscqParam) extends FiberPlugin {
     dec.addDecodingDefault(IS_CSR, False)
     Seq(Rv32i.CSRRW, Rv32i.CSRRS, Rv32i.CSRRC, Rv32i.CSRRWI, Rv32i.CSRRSI, Rv32i.CSRRCI)
       .foreach(dec.addDecoding(_, IS_CSR, True))
+    // E3 (baked in): pre-decode the env ops as control payloads (built at decodeAt) so the
+    // jumpAt-visible trap/mret qualifier reads a registered bit instead of the executeAt compare cone.
+    dec.addDecodingDefault(IS_ECALL, False);  dec.addDecoding(Rv32i.ECALL,  IS_ECALL, True)
+    dec.addDecodingDefault(IS_EBREAK, False); dec.addDecoding(Rv32i.EBREAK, IS_EBREAK, True)
+    dec.addDecodingDefault(IS_MRET, False);   dec.addDecoding(Rv32i.MRET,   IS_MRET, True)
     dlock.release()
 
     val c        = pp.ctrl(p.executeAt)
     val redirect = pcp.newRedirect()
-    import Rv32i.Opcode
 
     // ---- The machine CSR file (only the architecturally-live registers; see Csr) ----
     // With `p.csrWarl` each CSR's WARL/WLRL latitude is applied: fields that can only ever hold one
@@ -95,19 +105,19 @@ class CsrPlugin(p: RiscqParam) extends FiberPlugin {
 
     val csr = new c.Area {
       val word    = up(Fetch.WORD)                    // registered instruction word at execute
-      val opcode  = word(Rv32i.opcodeRange)
       val funct3  = apply(Decode.FUNCT3)
-      val addr    = word(31 downto 20).asUInt          // CSR address (also the SYSTEM funct12)
+      val addr    = word(31 downto 20).asUInt          // CSR address
       val rs1Idx  = word(Rv32i.rs1Range)
       val zimm    = word(Rv32i.rs1Range).asUInt.resize(Global.XLEN).asBits // 5-bit zero-extended
 
-      val isSystem = opcode === Opcode.SYSTEM
       val isCsr    = apply(IS_CSR)                      // decoded CSRR* (this plugin's own key)
-      val isEnv    = isSystem && funct3 === B"000"      // ECALL / EBREAK / MRET / WFI
 
-      val isEcall  = isEnv && addr === Csr.FUNCT12_ECALL
-      val isEbreak = isEnv && addr === Csr.FUNCT12_EBREAK
-      val isMret   = isEnv && addr === Csr.FUNCT12_MRET
+      // E3 (baked in): read the registered decoder keys instead of the live executeAt compares.
+      // Equivalent for every legal env word (the key is True exactly on that encoding); illegal words
+      // trap via isIllegal regardless of these bits.
+      val isEcall  = apply(IS_ECALL)
+      val isEbreak = apply(IS_EBREAK)
+      val isMret   = apply(IS_MRET)
       val isIllegal = !apply(Decode.LEGAL)             // every non-RV32I word traps (cause 2)
 
       // ---- CSR read (old value) ----
@@ -140,22 +150,34 @@ class CsrPlugin(p: RiscqParam) extends FiberPlugin {
       }
       // Set/clear with rs1/zimm == 0 must have no write side effect (spec).
       val writeEn = isCsr && down.isFiring && (funct3(1 downto 0) === B"01" || rs1Idx =/= 0)
-      when(writeEn) {
-        switch(addr) {
-          is(Csr.MSTATUS) {
-            mstatusMie  := nextValue(Csr.MSTATUS_MIE)
-            mstatusMpie := nextValue(Csr.MSTATUS_MPIE)
-            if (!p.csrWarl) mstatusMpp := nextValue(Csr.MSTATUS_MPP + 1 downto Csr.MSTATUS_MPP)
-          }
-          is(Csr.MTVEC)    { mtvec    := warlPc(nextValue) }      // WARL direct-only: [1:0] forced 0
-          is(Csr.MEPC)     { mepc     := warlPc(nextValue) }      // WARL IALIGN=32: [1:0] forced 0
-          is(Csr.MCAUSE)   { mcause   := warlCause(nextValue) }   // WLRL: only the low 4-bit code stored
-          if (!p.csrWarl) is(Csr.MTVAL) { mtval := nextValue }   // WARL: mtval hardwired 0
-          is(Csr.MSCRATCH) { mscratch := nextValue }
-          is(Csr.MIE)      { mie      := warlMie(nextValue) }     // WARL: only MSIE/MTIE/MEIE writable
-          // unmodelled CSRs: write ignored
-        }
-      }
+      // csrCommitMaxFanout: writeEn is the root of the per-CSR clock-enable decode (the observed
+      // `valid → … → mscratch/CE` serial chain) — cap its fanout so Vivado replicates the qualifier
+      // near each CSR's enable instead of routing one net into every CE. Bit-exact (attribute only).
+      if (p.csrCommitMaxFanout > 0) writeEn.addAttribute("MAX_FANOUT", p.csrCommitMaxFanout)
+
+      // Every writable CSR with its write action, in address-list order. Unmodelled CSRs have no
+      // entry: their writes are ignored.
+      val writeActions: Seq[(Int, () => Unit)] = Seq(
+        Option(Csr.MSTATUS -> { () =>
+          mstatusMie  := nextValue(Csr.MSTATUS_MIE)
+          mstatusMpie := nextValue(Csr.MSTATUS_MPIE)
+          if (!p.csrWarl) mstatusMpp := nextValue(Csr.MSTATUS_MPP + 1 downto Csr.MSTATUS_MPP)
+        }),
+        Option(Csr.MTVEC    -> (() => mtvec    := warlPc(nextValue))),    // WARL direct-only: [1:0] forced 0
+        Option(Csr.MEPC     -> (() => mepc     := warlPc(nextValue))),    // WARL IALIGN=32: [1:0] forced 0
+        Option(Csr.MCAUSE   -> (() => mcause   := warlCause(nextValue))), // WLRL: only the low 4-bit code stored
+        if (p.csrWarl) None else Some(Csr.MTVAL -> (() => mtval := nextValue)), // WARL: mtval hardwired 0
+        Option(Csr.MSCRATCH -> (() => mscratch := nextValue)),
+        Option(Csr.MIE      -> (() => mie      := warlMie(nextValue)))    // WARL: only MSIE/MTIE/MEIE writable
+      ).flatten
+
+      // B3 (baked in): each CSR gets its own flat `writeEn && (addr === X)` enable, decoded in
+      // PARALLEL from the registered execute payloads — instead of a when(writeEn){switch(addr)}
+      // nest, which Vivado maps into a serial decode chain through the per-CSR clock enables (the
+      // observed 5-level `valid → … → mstatusMie → mtvec → mscratch/CE` C1 path). The addresses are
+      // distinct so at most one enable fires ⇒ bit-identical to the switch; the trap/mret writes
+      // below keep last-assignment priority.
+      for ((csrAddr, action) <- writeActions) when(writeEn && addr === csrAddr) { action() }
 
       Execute.CSR_RD_DATA := rdValue
       // IS_CSR is a decoded payload, read by WriteBackPlugin.

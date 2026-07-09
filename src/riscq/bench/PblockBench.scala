@@ -53,7 +53,8 @@ import scala.io.Source
  * flow reaches them — so the placed/routed result is saved, not just the text report.
  */
 object PblockBench {
-  val vivadoBin = sys.env.getOrElse("RISCQ_VIVADO_BIN", "/opt/Xilinx/Vivado/2024.2/bin")
+  // Default to the `vivado` on PATH (its bin dir); RISCQ_VIVADO_BIN overrides.
+  val vivadoBin = sys.env.getOrElse("RISCQ_VIVADO_BIN", VivadoBench.resolveVivadoBin)
   val device    = sys.env.getOrElse("RISCQ_DEVICE", "xczu49dr-ffvf1760-2-e")
   val targetMhz = sys.env.getOrElse("RISCQ_FMAX_TARGET_MHZ", "1000").toDouble
   val periodNs  = 1000.0 / targetMhz

@@ -112,6 +112,11 @@ if {$fit} {
       # incl. it is kept in timing_paths_all.rpt).
       report_timing -delay_type max -max_paths 80 -nworst 1 -path_type full -group dspClk -file timing_paths.rpt
       report_timing -delay_type max -max_paths 40 -nworst 1 -path_type full -file timing_paths_all.rpt
+      # per-cone failing-endpoint classifier (specs/riscv-fmax.md A1) → cones_impl.rpt / cones_paths.tsv
+      if {[catch {
+        set CONES_DIR .
+        source [file join [file dirname [file normalize [info script]]] .. report-cones.tcl]
+      } _ce]} { puts "\[riscvsoc\] WARN: report-cones failed: $_ce" }
     }
   }
 }

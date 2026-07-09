@@ -66,7 +66,7 @@ case class ComplexMul(width: Int, saturate: Boolean = true, resetValid: Boolean 
   require(width >= 2, "Complex SF(width) needs at least a sign bit + a magnitude bit")
   // NB: do NOT KEEP_HIERARCHY this block — a fence here cuts the DSP48E2 pipeline and blocks the
   // register retiming the 3-DSP/lane packing relies on. Fence the *enclosing* datapath block
-  // (PulseGenerator / ReadoutDecoder / DemodCarrierGenerator) instead.
+  // (PulseGenerator / ReadoutDecoder) instead.
   val io = new Bundle {
     val cmd = slave(Flow(ComplexMulCmd(width)))  // no backpressure — II = 1 by construction
     val rsp = master(Flow(Complex(width)))       // rsp.valid is cmd.valid delayed by `latency`
@@ -109,8 +109,21 @@ case class ComplexMul(width: Int, saturate: Boolean = true, resetValid: Boolean 
   val ar1 = RegNext(ar0);  val ai1 = RegNext(ai0)
   val br1 = RegNext(br0);  val bi1 = RegNext(bi0)
 
-  // n2: shared product M = DA·bi; carry ar, ai, br, bi forward
-  val m2  = RegNext(da1 * bi1)
+  // n2: shared product M = DA·bi; carry ar, ai, br, bi forward.
+  // use_dsp on the three products only (mulM/mulPre/mulPim): the 14q SoC's ~2786-DSP demand sits
+  // right at Vivado's ~65% DSP-utilization heuristic, and without the directive the global DSP
+  // balancer demotes a handful of these muls to fabric (CARRY8 chains, dp ≈ 3.3 ns — measured:
+  // the 14q builds spilled 18 DSPs in the readout decoders and collapsed under the resulting
+  // congestion; the choice is also environment-sensitive, so un-pinned builds are not
+  // reproducible). Keep the scope tight: a module-level use_dsp drags the pre-adds /
+  // recombination adds into standalone DSPs (+425, 75% util ⇒ the datapath confine NOFITs).
+  // Expression-vs-register placement of the attribute synthesizes identically (measured,
+  // byte-identical builds); what the MREG absorption really needs is a CLOCKED synthesis run —
+  // an untimed run maps the product register as PREG and leaves MREG empty (DRC DPOP-4; see the
+  // riscvsoc-bd packaged-IP OOC XDC). Zero behavioural change.
+  val mulM = da1 * bi1
+  mulM.addAttribute("use_dsp", "yes")
+  val m2  = RegNext(mulM)
   val ar2 = RegNext(ar1);  val ai2 = RegNext(ai1)
   val br2 = RegNext(br1);  val bi2 = RegNext(bi1)
 
@@ -124,8 +137,12 @@ case class ComplexMul(width: Int, saturate: Boolean = true, resetValid: Boolean 
   // n4: side products PRE = DB·ar, PIM = SB·ai; dedicated M copies MCR, MCI per output:
   //     each copy's reg maps to its recombination DSP's C register (CREG), so M is a settled
   //     low-fanout C-port input rather than a live high-fanout route from M's DSP output
-  val pre4 = RegNext(db3 * ar3)
-  val pim4 = RegNext(sb3 * ai3)
+  val mulPre = db3 * ar3
+  val mulPim = sb3 * ai3
+  mulPre.addAttribute("use_dsp", "yes")
+  mulPim.addAttribute("use_dsp", "yes")
+  val pre4 = RegNext(mulPre)
+  val pim4 = RegNext(mulPim)
   val mcr4 = RegNext(m3)
   val mci4 = RegNext(m3)
 

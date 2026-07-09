@@ -7,7 +7,7 @@ import riscq.riscv.{Global, RiscqParam}
 import riscq.riscv.decode.{Decode, DecoderPlugin, Rv32i, Rv32m}
 import riscq.riscv.misc.PipelinePlugin
 
-/** Control + result payloads the M-extension multiplier owns and shares. */
+/** Control + result payloads the Zmmul multiplier owns and shares. */
 object MulPlugin extends AreaObject {
   /** Decoded: this instruction is MUL/MULH/MULHSU/MULHU. Read here (halt + result) and by
    *  WriteBackPlugin (as the rd-write select, registered via `addRdSource`). */
@@ -82,7 +82,12 @@ class MulPlugin(p: RiscqParam) extends FiberPlugin {
       val counter = Reg(UInt(log2Up(latency + 1) bits)) init 0
       val busy    = counter =/= latency
       when(active && busy) { counter := counter + 1 } otherwise { counter := 0 }
-      haltWhen(active && busy)
+      // E2 (baked in): `cancelled` (up.isCancel) is kept out of the halt qualifier — same reason as the
+      // LSU. A cancelled multiply is only ever hit on its first cycle (counter stays 0 since the
+      // increment keeps `active`), and the flush clears this stage's valid next edge off the ready spine,
+      // so the one extra halted cycle is inside the mispredict flush shadow — zero IPC.
+      val haltActive = isValid && sel
+      haltWhen(haltActive && busy)
 
       val first  = active && counter === 0 // capture operands (their bypass window is one cycle)
       val second = active && counter === 1 // partial products ready: start the weighted-sum tree

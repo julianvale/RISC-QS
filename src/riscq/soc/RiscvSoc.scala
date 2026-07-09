@@ -8,9 +8,9 @@ import spinal.lib.misc.plugin.Hostable
 import spinal.lib.bus.tilelink
 import spinal.lib.bus.tilelink.fabric.{Node, MasterBus}
 import spinal.lib.bus.misc.SizeMapping
-import riscq.memory.Bram
+import riscq.memory.{Bram, HalfUram, Uram}
 import riscq.soc.fabric.{RiscqFiber, TileLinkCpuMemFiber, MemMapFiber}
-import riscq.soc.rf.{TimeMemMap, HostMemMap}
+import riscq.soc.rf.TimeMemMap
 import riscq.soc.link.{RfLinkBridge, ReadoutResult, ReadoutResultSink, RfCmd}
 
 /**
@@ -21,7 +21,7 @@ import riscq.soc.link.{RfLinkBridge, ReadoutResult, ReadoutResultSink, RfCmd}
  * converter-edge DSP datapath) stays OUT, in the parent.
  *
  * IO boundary — narrow and **registered** on both sides of the posted link:
- *   - `time` / `fromHost`        : shared batch-time broadcast + host→CPU mailbox (in);
+ *   - `time`                     : shared batch-time broadcast (in);
  *   - `cmd : master Flow(RfCmd)`  : posted RF writes out of the [[RfLinkBridge]] → the DSP datapath;
  *   - `resultIn : slave Flow(ReadoutResult)` : the readout result back from the DSP → [[ReadoutResultSink]];
  *   - `iLoad`  (a [[MasterBus]] slave-IO, implicit dsp clock) : the program/data image load into the
@@ -48,6 +48,7 @@ case class RiscvSoc(
     memDepth: Int = 1024,
     memWidth: Int = 32,
     memOutReg: Boolean = true,
+    useUram: Boolean = true,
     rfAddrWidth: Int = 18,
     // test harness: add a second master into the CPU data-bus decode (a sim drives it directly).
     withTestTap: Boolean = false,
@@ -60,7 +61,6 @@ case class RiscvSoc(
 
   // ── IO boundary ──
   val time     = in  port UInt(timeWidth bits)        // shared batch-time broadcast
-  val fromHost = in  port Bits(32 bits)               // host→CPU mailbox
   val cmd      = master port Flow(RfCmd(rfAddrWidth)) // posted RF writes (RfLinkBridge) → DSP
   val resultIn = slave  port Flow(ReadoutResult(readoutAccWidth)) // readout result ← DSP → sink
 
@@ -78,15 +78,40 @@ case class RiscvSoc(
   // is the single clock for the BRAM, the instruction arbiter and the `iLoad` slave-IO. `riscqCd` (same
   // clock, core reset) is passed in and wraps only the CPU + control fibers below.
   val riscqFiber = riscqCd(RiscqFiber(plugins))
-  val mem = Bram(Bits(memWidth bits), depth = memDepth,
-    fastCd = ClockDomain.current, slowCd = ClockDomain.current, outReg = memOutReg)
-  mem.addAttribute("KEEP_HIERARCHY", "TRUE")
+  // CPU instruction/data RAM: block RAM by default, UltraRAM with `useUram`. Both expose the same two
+  // true-dual-port read/write ports (port0/port1, here single-clock in the implicit dsp domain).
+  // Only DEEP memories (memDepth > 4096) use a HalfUram: it packs two 32-bit words per 64-bit UltraRAM
+  // row, so the array costs half the URAM primitives of a 1-word-per-row Uram (32-bit only — hence the
+  // memWidth guard). At or below one URAM's 4096-deep primitive a plain Uram already fits in a single
+  // URAM, so HalfUram's combinational read-half mux would only add datapath delay for no primitive
+  // saving — use a plain Uram there. Both URAM forms share the same read latency (uramPipeNum + 2).
+  // Read latency differs and the fibers must be told exactly: Bram = 1 + outReg (2); the URAM template
+  // chains memreg + NBPIPE pipes + the dout register, so pipeNum = 1 is 3 — one MORE than Bram+outReg
+  // (HalfUram's half-mux is combinational, so it inherits that exact latency — Uram and HalfUram match).
+  // (Feeding the fibers latency 2 with the URAM made every read — CPU load, fetch, host readback —
+  // return the *previous* read's data; caught by the M0 co-sim contract test + PulseTableSocCpuSim.)
+  val uramPipeNum = 1
+  val (mem, memPort0, memPort1, memReadLatency) = if (useUram) {
+    if (memDepth > 4096) {
+      require(memWidth == 32, s"HalfUram-backed CPU RAM is 32-bit only, got memWidth=$memWidth")
+      val uram = HalfUram(addressWidth = log2Up(memDepth), pipeNum = uramPipeNum)
+      (uram, uram.io.port0, uram.io.port1, uramPipeNum + 2)
+    } else {
+      val uram = Uram(Bits(memWidth bits), addressWidth = log2Up(memDepth), pipeNum = uramPipeNum)
+      (uram, uram.io.port0, uram.io.port1, uramPipeNum + 2)
+    }
+  } else {
+    val bram = Bram(Bits(memWidth bits), depth = memDepth,
+      fastCd = ClockDomain.current, slowCd = ClockDomain.current, outReg = memOutReg)
+    (bram, bram.io.port0, bram.io.port1, 1 + memOutReg.toInt)
+  }
+  mem.setName("mem").addAttribute("KEEP_HIERARCHY", "TRUE")
 
   // The data bus already carries the posted-store adapter inside RiscqFiber (on the DataMemBus, ahead of
   // its Tilelink bridge), so the fabric just decodes the resulting Tilelink master.
   val dMemPortDec = riscqCd(Node())
   dMemPortDec at 0 of riscqFiber.dBus
-  val dBusFiber = riscqCd(TileLinkCpuMemFiber(mem.fastPort, withOutReg = memOutReg))
+  val dBusFiber = riscqCd(TileLinkCpuMemFiber(memPort0, latency = memReadLatency))
   dBusFiber.up at memOffset of dMemPortDec
 
   // optional test tap: a second master into the data-bus decode (the sim drives dTap.node.bus directly).
@@ -102,14 +127,13 @@ case class RiscvSoc(
   val iMemPortArb = Node()
   iMemPortArb at memOffset of riscqFiber.iBus
   iMemPortArb at 0 of iLoad.node
-  val iBusFiber = TileLinkCpuMemFiber(mem.slowPort, withOutReg = memOutReg)
+  val iBusFiber = TileLinkCpuMemFiber(memPort1, latency = memReadLatency)
   iBusFiber.up at 0 of iMemPortArb
 
-  // ── control block: time / fromHost (+ the core-local readout-result sink, added after the bridge) ──
+  // ── control block: time (+ the core-local readout-result sink, added after the bridge) ──
   val memMapFiber = riscqCd(MemMapFiber(addressWidth = 22, dataWidth = 32))
   val ctrlTime    = riscqCd(getPipe(time, 1))
   val timeMemMap  = TimeMemMap(ctrlTime); memMapFiber.addMapping(timeMemMap.mapping)
-  val hostMemMap  = HostMemMap(fromHost); memMapFiber.addMapping(hostMemMap.mapping)
 
   // ── posted-link bridge + core-local readout-result sink (riscqCd) ──
   val posted = riscqCd { new Composite(this, "posted") {
@@ -118,8 +142,8 @@ case class RiscvSoc(
     bridge.up.setUpConnection(a = StreamPipe.FULL, d = StreamPipe.FULL)
 
     val sink = ReadoutResultSink(readoutAccWidth, resAddr = 0x4200, realAddr = 0x4204, imagAddr = 0x4208)
-    sink.resultIn << resultIn                       // up-link result arrives from the DSP (parent)
-    sink.arm := bridge.cmd.valid && (bridge.cmd.payload.address === (0x30000 + 0x0)) // decoder dur-write (local)
+    sink.resultIn << resultIn                       // up-link result arrives from the DSP (parent); the
+                                                    // sink mirrors the decoder's res.valid level (no arm)
   } }
 
   cmd << posted.bridge.cmd                          // posted RF writes leave for the DSP datapath

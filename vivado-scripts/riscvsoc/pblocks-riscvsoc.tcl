@@ -97,7 +97,10 @@ foreach i $ids {
   set rowIdx  [expr {$idx / $perRow}]
   set bandIdx [expr {$idx % $perRow}]
   set rr      [expr {$baseRow + $rowIdx}]
-  set coreCells [get_cells -hierarchical -filter "NAME =~ *riscqArea_riscqCores_${i}_riscvSoc/*"]
+  # keep the core's `mem` URAM OUT of the band at the membership level (X0 rows carry no URAM column,
+  # and the site-float trick can't float a site type the band doesn't contain) — it floats to the
+  # nearest URAM column instead of raising Place 30-640. Same fix as pblocks-bd.tcl (94eaee4).
+  set coreCells [get_cells -hierarchical -filter "NAME =~ *riscqArea_riscqCores_${i}_riscvSoc/* && NAME !~ *riscqArea_riscqCores_${i}_riscvSoc/mem && NAME !~ *riscqArea_riscqCores_${i}_riscvSoc/mem/*"]
   # match the FF cells `coreTime_i_reg[*]` exactly — the trailing `[` excludes the decoder's
   # RegNext(time) copy `coreTime_i_regNext_reg[*]`, which belongs to the (confined) datapath.
   set tcells [get_cells -quiet -hierarchical -filter "NAME =~ *coreTime_${i}_reg\[*"]

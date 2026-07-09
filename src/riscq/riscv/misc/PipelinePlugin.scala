@@ -110,7 +110,7 @@ class PipelinePlugin(param: RiscqParam) extends FiberPlugin {
     ctrls.last.down.ready := True // the core never back-pressures its own retirement (yet)
     // fmax hint: cap the regReadAt ready-net fanout. Guard for short sub-pipelines (the decode-only one
     // used by DecodeSim has only stages 0..decodeAt, so no stage 3) — full core has ≥4 stages.
-    if (ctrls.length > 3) ctrls(3).down.ready.addAttribute("MAX_FANOUT", 128)
+    if (ctrls.length > param.fetchLatency + 2) ctrls(param.fetchLatency + 2).down.ready.addAttribute("MAX_FANOUT", 128)
 
     val all: Seq[Link] = links.toList ++ ctrls ++ idToSkid.values
     Builder(all)

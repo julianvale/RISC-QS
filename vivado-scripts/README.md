@@ -1,7 +1,8 @@
 # vivado-scripts — Vivado flows for `PulseTableSoc` on the ZCU216 (xczu49dr)
 
 Two self-contained Vivado flows for the SpinalHDL [`PulseTableSoc`](../src/riscq/soc/PulseTableSoc.scala)
-on the Zynq UltraScale+ RFSoC `xczu49dr-ffvf1760-2-e` (ZCU216, Vivado 2024.2). Each lives in its own
+on the Zynq UltraScale+ RFSoC `xczu49dr-ffvf1760-2-e` (ZCU216; built with the `vivado` on `PATH`,
+currently 2026.1). Each lives in its own
 subfolder and is driven by a single `build-*.sh` script.
 
 | | [`riscvsoc/`](riscvsoc/) | [`riscvsoc-bd/`](riscvsoc-bd/) |
@@ -43,3 +44,21 @@ cd vivado-scripts/riscvsoc-bd   && ./build-riscvsoc-bd.sh     # block design, 14
 
 `RISCQ_QUBITS=3 ./build-*.sh` runs a smaller config for fast iteration. Each subfolder's `README.md`
 documents its full env-knob set, recipe, and the reports it writes.
+
+## Per-cone timing tracking — `report-cones.tcl`
+
+Both flows classify every failing endpoint of the routed design into the named logic cones of
+[`specs/riscv-fmax.md`](../specs/riscv-fmax.md) §2 (core C1 jumpAt-broadcast / C2 fetch-front-CE /
+C3 operand-ALU) and [`specs/new-readout-decoder/soc-fmax.md`](../specs/new-readout-decoder/soc-fmax.md)
+§2.1 (RF channel/buf/link, CORDIC, TimedQueue, ADC pipe, decoder, …), writing into the build folder:
+
+- `cones_impl.rpt` — cone × {n, TNS, worst slack, CE/D/SR endpoint-pin split} + unmatched shapes
+- `cones_paths.tsv` — the raw worst-path-per-endpoint dump for offline drill-down
+
+The cone table is the **stable unit of timing tracking** (individual failing paths shuffle between
+builds; the cone totals move coherently) — gate every timing lever on a cone-level number, not a WNS
+glance. Runs standalone on any routed checkpoint too:
+
+```bash
+vivado -mode batch -source report-cones.tcl -tclargs <routed.dcp> [outdir]
+```

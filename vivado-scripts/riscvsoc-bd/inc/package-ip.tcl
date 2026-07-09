@@ -4,9 +4,33 @@
 # parameters and (b) bind each bus interface to its clock — S_AXIS to the 100 MHz hostClk, every
 # DAC{i}_AXIS / ADC{i}_AXIS to the 500 MHz dspClk. Ported from the RISC-Q `plip.tcl`.
 
+# OOC synthesis clocks for the packaged IP. Vivado gives a packaged user IP NO clocks in its
+# out-of-context child synth run, so that run maps UNTIMED — measured on the 14q SoC: the DSP
+# mapper then leaves the ComplexMul MREG stage empty (108 DSP48s at DRC DPOP-4, mult→ALU→P
+# combinational at 500 MHz) and the pg-cordic cone collapses the whole build; the identical
+# netlist synthesized WITH these clocks maps MREG correctly (DPOP-4 = 0). The XDC must be a
+# project source BEFORE ipx::package_project -import_files, or the packager drops it
+# (IP_Flow 19-5109); the `out_of_context` USED_IN tag scopes it to the OOC child run only —
+# in-context, the BD's real clocks rule.
+set fh [open $SOURCE_PATH/PulseTableSoc_ooc.xdc w]
+puts $fh "create_clock -name dspClk -period [format %.3f [expr {1e9 / $DSP_FREQ}]] \[get_ports dspClk\]"
+puts $fh "create_clock -name hostClk -period [format %.3f [expr {1e9 / $HOST_FREQ}]] \[get_ports hostClk\]"
+close $fh
+add_files -fileset constrs_1 $SOURCE_PATH/PulseTableSoc_ooc.xdc
+set_property USED_IN {synthesis implementation out_of_context} [get_files $SOURCE_PATH/PulseTableSoc_ooc.xdc]
+
 ipx::package_project -root_dir $IP_REPO -vendor user.org -library user -taxonomy /UserIP \
   -import_files -set_current false -force -quiet
 ipx::open_ipxact_file $IP_REPO/component.xml
+
+# ensure the packaged copy keeps the OOC scoping, then drop the project-side entry (the IP holds
+# its own imported copy; the outer BD project must not carry an IP-port create_clock).
+foreach _g [ipx::get_file_groups -of_objects [ipx::current_core]] {
+  foreach _f [ipx::get_files -of_objects $_g "*PulseTableSoc_ooc.xdc"] {
+    set_property USED_IN {synthesis implementation out_of_context} $_f
+  }
+}
+remove_files [get_files $SOURCE_PATH/PulseTableSoc_ooc.xdc]
 
 # clock frequencies
 ipx::add_bus_parameter FREQ_HZ [ipx::get_bus_interfaces hostClk -of_objects [ipx::current_core]]

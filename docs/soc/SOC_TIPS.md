@@ -160,8 +160,9 @@ to predict an exact `real`/`imag` is the deferred "absolute alignment" problem (
 - **No overflow surprise:** the demod product is `(a·b+½ulp)>>(w−1)` *resized to w bits* before the adder
   tree (`ComplexMul` output is `w`-wide, not `2w`), so the `accWidth`-bit accumulator only grows like
   `w + log2Up(adcN) + durWidth` — `accWidth = 32` is safe for any sane window.
-- **Read it back over the real bus:** arm with `dur` then read `res` (which **halts** until the integral
-  settles — §2.3), then `real`/`imag`. No `simPublic` on the decoder needed — go through the TL slave.
+- **Read it back over the real bus:** fire the demod (its slot `dur` is the window), wait past the
+  window's opening, then read `res` (which **halts** until the integral settles), then `real`/`imag`. No
+  `simPublic` on the decoder needed — go through the TL slave.
 - **`io.adc` is a `slave Stream`** the SoC reads **combinationally** (it ignores `valid`); drive
   `.payload` (and `.valid` for tidiness), never `.ready` (the top drives it). Hold every ADC `payload` at
   0 from t=0 so the `robs` ADC-sum reduction never latches X before the readout part runs.
@@ -195,9 +196,96 @@ CPU is the sole `dBus` master). Mechanics that bit:
 
 - **`PulseTableTerm` field widths** must match their destination `PulseGenerator.io` port widths
   (`durWidth ≠ dataWidth` is allowed) — `assignFromBits` requires equal widths. Parameterize each field.
-- **`ReadoutDecoder.accWidth`** is `require`-checked `≥ dataWidth + log2Up(batchSize) + durWidth`, **and**
-  must stay `≤ 32` to read the integral back in one TL word ⇒ give the readout a **narrower
-  `readoutDurWidth`** (the integration window) than the drive `durWidth`.
+- **`startTime` auto-advance staging (spec 09 B0) is beat-order — the staging is load-bearing.** Every fire
+  adds the fired slot's `dur` to that buffer's `startTime`, applied the **beat after** the fire (the fired
+  `outId`/`outParam` settle a cycle later). Two facts make the staging matter: (1) back-to-back
+  `play()`/`fire()` calls really do produce **adjacent cmd beats** through the posted link, so an explicit
+  `set_start` can land on the very beat after a fire — it must **win** over the increment (a
+  `!explicitStartWrite` guard; `…fire(a); set_start(t)…` leaves `t`, not `t+dur_a`); (2) the export carries
+  one `RegNext` (`io.startTime := RegNext(startTime)`), so — since a fired pulse reaches the `TimedQueue`
+  push 2 cycles after its fire beat and the queues sample `startTime` **at push** — each fired pulse
+  captures `startTime` **as of its own fire beat (pre-increment)** and back-to-back fires capture the
+  running sum. The rejected alternative (increment when `outParamFlow.valid`, 2 beats late, no export stage)
+  lets an intervening absolute `set_start` be corrupted (`fire@N, set_start@N+1, inc@N+2` → `t+dur`). The
+  extra stage is uniform across buffers ⇒ absolute pulse timing is bit-identical for all existing software.
+- **`ReadoutDecoder.accWidth`** is `require`-checked `≥ dataWidth + log2Up(batchSize) + maxWinLog2`, **and**
+  must stay `≤ 32` to read the integral back in one TL word. The window length is the **demod pulse's
+  `dur`** (16-bit field), so the bound is a *software* contract: the driver rejects a demod-table
+  `dur > 2^maxWinLog2` (default 2^14) — hardware can no longer clamp it with a narrow field width.
+- **Readout pacing (carrier-triggered decoder).** The demod carrier's `valid` is the decoder window
+  ([specs/new-readout-decoder](../../specs/new-readout-decoder/README.md)); the decoder's `res.valid` is
+  forwarded up as a **level** the sink mirrors, so `read_res` is **idempotent** (no arm, no consume).
+  Freshness is a *software timing* contract: after firing the demod at `t`, `wait_until(t + RQ_RO_LEAD)`
+  before `read_res` so the previous shot's still-held level has dropped (past `winStart`) — reading earlier
+  returns the previous shot. Also keep ≥ 1 idle batch between consecutive demod windows (zero-gap windows
+  have no falling edge and merge into one integral — and a fire *during* an open window extends it, since
+  the generator's `dur` counter reloads).
+- **The demod carrier DOES re-tune + re-play on-core** (spec 08 §2.2 / B1; debunks the
+  `riscq/cal/readout.py` "can't be re-tuned + re-played on-core" folklore, which had no root cause and
+  forced the VNA into a host loop). One program that `set_freq(demod, code)` + re-plays per point
+  resolves the matched code (peak at 4× the DAC code) *element-for-element identically* to a host loop
+  of one run per code (`software/tests/test_vna_retune.py`). **Requirement:** schedule each retuned play
+  far enough ahead that the phasor-regen lead is covered — `set_freq` pushes the freq into the phasor
+  queue against the buffer's *current* startTime, and the phasor regenerates `leadFreqP` (≈ linkPipe+52)
+  cycles before it; a grid `period ≫ LEAD` between points covers this with margin (`init_pulse_params`
+  anchoring startTime to `now()` up front makes the first regen due immediately — *wrap-safely*; see the
+  next bullet for why it must be `now()`, not 0). The old failure was almost certainly a play issued too
+  soon after the retune, not a HW limit.
+- **`set_freq` against `startTime = 0` "sticks" on hardware (the `TimedQueue` wrap window).** *Symptom:*
+  sweeping a carrier across reruns, the frequency intermittently doesn't change — sometimes a whole sweep
+  reads back at one (stale) frequency; amplitude/phase sweeps never do this; co-sim never reproduces it.
+  *Cause:* `set_freq` pushes the freq into the pulse-generator phasor/carrier `TimedQueue`s tagged with
+  the buffer's *current* `startTime`, and the queue's due test `!(time + leadC1 − startTime).msb` is a
+  SIGNED compare — only wrap-safe within ±2^31 of `io.time`. `io.time` (`refTime + timeOffset`) FREE-RUNS
+  and is never reset (the drive-drop fix below), wrapping 2^32 every ~8.6 s. Scheduling against absolute
+  `0` while `io.time` is in the upper half (≥ 2^31, ~half of every uptime cycle) reads as ~2^31 in the
+  *future* ⇒ the entry never pops ⇒ the phasor regen never fires ⇒ the carrier holds its previous
+  frequency. Co-sim starts `refTime` at 0 and never reaches 2^31 in a short run, so it always "works"
+  there — the bug is hardware-only. Amplitude/phase are immune: they're pushed on `fire`, scheduled at the
+  pulse's own `startTime = now()+LEAD` (always within `LEAD` of `io.time`, hence always in-window).
+  *Fix:* schedule the freq against a near-`now()` time — `init_pulse_params` now does `set_start(ch,
+  now())` (was `0`), which is bit-exact in co-sim (both due immediately when `time ≈ 0`) and correct on
+  hardware, so every `init_pulse_params; set_freq` kernel (all of `riscq.cal.kernels`) is covered. A
+  hand-written kernel that `set_freq`s *without* a preceding `init_pulse_params` must likewise anchor its
+  `startTime` to `now()` (or the pulse's `t`), never 0. Deterministic repro without hardware: write
+  `timeOffset ≥ 2^31` to the host control block so `io.time` lands in the upper half — the old
+  `set_start(0)` schedule then fails while the `now()` schedule still tracks.
+- *(Historical — the armed decoder, removed by the carrier-triggered rewrite.)* The old software-armed
+  window had a startTime-before-`dur` ordering contract whose violation latched a stale previous-shot
+  window that silently survived resets (`decStartTime` lived in `dspCd`); a matched readout then collapsed
+  to a fixed fraction on every re-play, masquerading as "the carrier dies on re-fire" (commit `4e55a2c`).
+  That bug class — not just the bug — is why the decoder is now triggered by the carrier itself.
+- **A pulse un-drained at a run's end drops the NEXT run's drive** (the "multi-pulse batch corrupts the
+  next run" folklore; spec 08 §3 / B0). **Symptom:** after a program schedules a drive pulse well in the
+  future and returns before batch time reaches it, the *next* program's drive never reaches the DAC (the
+  captured window is all-zero); a program that waits past its last pulse leaves the next run clean.
+  **Cause:** each `PulseGenerator` parameter (amp/phase/env/dur) is a `TimedQueue` (async-read
+  `StreamFifo`) that pops when `time ≥ startTime − lead`. The generators live in `dspCd`, which
+  `riscqReset` does **not** reset. When `refTime` (hence batch `time`) was *also* zeroed at each run's
+  reset, a leftover entry kept the previous run's large `startTime`, sat at the FIFO head "in the future,"
+  and blocked every fresh entry queued behind it (FIFO order); `init_pulse_params` only clears the
+  buffer's `startTime` register, it cannot drain the queues. **Fix:** make `refTime` **free-running** in
+  `dspCd` — NOT reset by `riscqReset`, only by the external `dspRst` — so batch `time` is **monotonic
+  across runs** (`PulseTableSoc.riscqArea`). A leftover entry then falls into the *past*, pops as `time`
+  sweeps past its `startTime`, and drains on its own before the next run schedules anything, so runs are
+  independent with no per-run queue flush and no software preamble. Software works in now()-relative time,
+  so the ever-growing base is transparent. Repro: `software/tests/test_batch_drivedrop.py`
+  (drained-vs-un-drained A/B pins it to the leftover entries).
+- *(Folklore, retired — the warm-up row / "cold first readout".)* Every cal once discarded its first
+  measurement ("the cold-decoder first read"; "absorbs the cold-first-readout verilator settle"), later
+  batched as a discarded row 0 repeating point 0 (specs 08/09). It was never an analog/settle effect —
+  Verilator is two-state and deterministic. The three real mechanisms behind bad early reads are all
+  fixed: the armed decoder's never-reset `decStartTime` + arm-ordering (removed by the carrier-triggered
+  rewrite — the first `res` read now HALTS until the first window's integral settles, sink `init False`),
+  the un-drained timed-queue drive-drop (free-running `refTime`, above), and stale amp/phase in a fresh
+  SoC's first window batches (the `LEAD = 96` contract, `map.py`). `test_batch.py::test_first_row_clean`
+  pins it: a run's first window is bit-identical to later ones. [Spec 11](../../specs/software/11-remove-warmup.md)
+  removed the row; first-read hygiene is a *timing* contract (`LEAD` / `wait_until(t + RQ_RO_LEAD)`),
+  not a discarded measurement.
+- *(Co-sim infra corollary.)* `riscq.sim.rtl.ensure_rtl` caches the generated `PulseTableSoc.v` on the
+  **config-JSON hash only** — after editing the *RTL Scala* it returns the stale `.v`, so the co-sim
+  silently tests the un-patched design. Delete `software/build/<name>/` (or its `rtl/.config.sha`) to
+  force a regen before trusting a co-sim run after an RTL change.
 - **Elaboration check for a fiber `Area`**: wrap it in a `Component` that supplies the clock domains and
   **stub host masters** (`MasterBus`) for its otherwise-dangling slave nodes (`iMemPortArb`,
   `pulseMemFiber.up`), else the fabric can't negotiate. Drive any init-only `Reg`s (e.g. `time := time +
@@ -274,7 +362,7 @@ Fence each DSP datapath Component so it synthesizes as a self-contained unit and
 into DSP48E2s independently, before any global budget check:
 ```scala
 case class PulseGenerator(...) extends Component {
-  this.addAttribute("KEEP_HIERARCHY", "TRUE")   // likewise ReadoutDecoder, DemodCarrierGenerator
+  this.addAttribute("KEEP_HIERARCHY", "TRUE")   // likewise ReadoutDecoder
 ```
 Measured at 14 q (default synth flow, two-clock XDC):
 
@@ -343,7 +431,8 @@ are all actually consumed — or tie the dead ones off **inside** the block so i
 
 ## 8. Taking the SoC to real ZCU216 hardware (`vivado-scripts/`)
 
-The maintained Vivado flows for `PulseTableSoc` on the `xczu49dr` (2024.2) are **`riscvsoc-bd/`** (block
+The maintained Vivado flows for `PulseTableSoc` on the `xczu49dr` (built with the `vivado` on `PATH`,
+currently 2026.1) are **`riscvsoc-bd/`** (block
 design + IP packager, mirrors RISC-Q `gen-project.sh`) and the **`riscvsoc/`** OOC place&route bench. An
 earlier **flat** flow (flat RTL with the PS/RFDC as SpinalHDL blackboxes, top `Zcu216TopFlat`) was
 removed; its generator `Zcu216TopFlat` and the design lessons below (8.2 / 8.4 / 8.5) are kept for

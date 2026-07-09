@@ -1,36 +1,64 @@
 # examples — co-simulation notebooks
 
-Runnable [`docs/software/06`](../docs/software/06-cosim.md) co-simulation examples: the production
-control software ([`software/python/riscq`](../software/python/riscq)) driving the **Verilated
-`PulseTableSoc`** under cocotb, in pure Python.
+Runnable notebooks that drive the **Verilated `PulseTableSoc`** under cocotb — the same host control
+software (`riscq.lang`/`riscq.run` to compile and run on-core kernels, `riscq.cal`/`riscq.sim` for
+the calibrations) that runs on the ZCU216 board, here against a Verilated SoC instead of real
+hardware.
 
-| Notebook | What it shows | Plots |
-|---|---|---|
-| [`01_pulse_train_dac0.ipynb`](01_pulse_train_dac0.ipynb) | ten gate pulses with increasing amplitude on **DAC 0**, scheduled with the `Program` DSL and played by the RISC-V core | the captured `dac_0` waveform (the pulse train + a zoom + peak-vs-amplitude) |
-| [`02_readout_demod_adc14.ipynb`](02_readout_demod_adc14.ipynb) | a **readout**: a cosine injected on **ADC 14** demodulated by a frequency-matched LO, integrated, and read back | the `adc_14` input and the demod signal (matched vs detuned integral) |
+Start with [`amplitude_sweep.ipynb`](amplitude_sweep.ipynb) — a minimal drive demo — then the two
+calibration notebooks, which run against a `TwoLevelModel` with **planted ground truth** instead of
+a real qubit (co-sim analogues of the hardware `Calibration_X6Y3` and `single_qubit_autocalibrate_v2`
+flows; specs [`05-simulation`](../specs/software/05-simulation.md),
+[`06-calibrations`](../specs/software/06-calibrations.md)).
 
-Both drive the same example DUT — `CosimExampleGen`, the 2-qubit `PulseTableSoc` with core 0 wired to
-its production converters (DAC 0 / ADC 14) so the notebooks use those ports by their board names. Each
-notebook **builds its pulse program inline** with the `Program` DSL, compiles it, and the harness loads
-+ runs it on the Verilated SoC.
+| Notebook | What it shows |
+|---|---|
+| [`amplitude_sweep.ipynb`](amplitude_sweep.ipynb) | the smallest end-to-end example — an on-core `@kernel` fires a train of gate pulses with a ramping amplitude; the notebook captures the raw gate **DAC waveform** off the SoC and plots the pulse train, the pulse shape, and the (linear) peak-vs-amplitude. No qubit model — just the drive signal the hardware emits |
+| [`single_qubit_calibration.ipynb`](single_qubit_calibration.ipynb) | the `Calibration_X6Y3` flow, one experiment per cell — ReadoutCalibration → Separation → Fidelity → ReadoutFidelity → Frequency → Amplitude (coarse) → Amplitude (fine) → Phase — pulling a deliberately-detuned `Config` back to the planted `f_ge`/Rabi ground truth |
+| [`single_qubit_autocalibrate.ipynb`](single_qubit_autocalibrate.ipynb) | the `single_qubit_autocalibrate_v2` flow via [`autocal.py`](autocal.py): spectroscopy → Ramsey (frequency) → Rabi (amplitude) → T1, with an `expts_to_run` gating dict, incremental frequency updates, and the automatic **Ramsey-after-Amplitude re-run** (AC-Stark) rule |
 
-## Running (uv)
+[`autocal.py`](autocal.py) is the plain host-python autocalibration **script** the second notebook
+imports — the between-experiment control flow (ordering, gating, the conditional re-run) needs no
+kernel DSL because it runs on the host.
 
-The `software/python` project carries a uv environment with everything the notebooks need (numpy,
-cocotb, matplotlib, jupyterlab — the `examples` dependency group, installed by default). From the repo
-root:
+Four notebooks target **real hardware** instead of the co-sim and are therefore *not* executed in CI:
+
+| Notebook | What it shows |
+|---|---|
+| [`remote_pulse.ipynb`](remote_pulse.ipynb) | the ZCU216 quickstart — connect to the board server with `RemoteDriver`, upload/load a gateware bundle, and fire a pulse train from an on-core `@kernel` on a real DAC. Server setup: [docs/software/board-server.md](../docs/software/board-server.md) |
+| [`readout_robs.ipynb`](readout_robs.ipynb) | fire **one** readout-drive pulse at 2.76 GHz on qubit 1's readout channel (1) on the `xm650-loopback` board and plot the SoC's readout-observation buffer (`robs`) — the raw ADC-rate trace the hardware streams (per-lane sum of the mapped ADCs) for the whole time the pulse is valid, i.e. the looped-back readout tone coming back off the DAC (folded to ~0.76 GHz at the 2 GS/s ADC). The minimal `robs` demo — one `rq.run` + one `rq.read_robs` |
+| [`vna.ipynb`](vna.ipynb) | a wideband VNA on the `xm650-loopback` board — from-scratch on-core `@kernel`s sweep the readout carrier 0.1 → 7.9 GHz (the full 8 GS/s Nyquist zone, 781 points at 10 MHz) and plot the mean shot amplitude per frequency. Two implementations, both bounded by the 16 KB core RAM: one keeps **every** shot's raw IQ (6 MB → one `rq.rerun` per frequency, 781 reruns), the other **accumulates each shot's power** `re²+im²` on-core (phase-insensitive, 1 word/point, sweeping the frequency code on-core via a wrapping-Q16 accumulator → the whole sweep in one rerun); the notebook compares their data-collection time |
+| [`iq_scatter.ipynb`](iq_scatter.ipynb) | single-shot IQ at a **fixed** 2.75 GHz on the `xm650-loopback` board — the readout drive (ch 1) plays a measurement tone, the demod carrier (ch 2, `demod_freq_to_code` = 4× the drive code, folded above its own Nyquist) returns one `(I, Q)` per shot. Records **10,000 shots** (10 reruns of 1,000 — the 16 KB core RAM caps one `out` buffer at ~2,000 words) and draws the IQ **scatter**; the blob's 1-σ spread is the readout noise floor |
+
+Each notebook owns the sim lifecycle itself: `server.start(...)` brings up the cocotb bench,
+`drv.sim.set_model(...)` plants the `TwoLevelModel`, the calibrations run, and a final cell calls
+`server.stop(drv)`.
+
+## Running
+
+The notebooks import the editable-installed `riscq` package, so they run from any working directory.
+Execute one headless (this is exactly what CI does):
 
 ```bash
-uv sync --project software/python                            # one-time: build the shared .venv + uv.lock
-uv run --project software/python jupyter lab examples/       # launch JupyterLab on the examples
+jupyter nbconvert --to notebook --execute --inplace examples/amplitude_sweep.ipynb
+jupyter nbconvert --to notebook --execute --inplace examples/single_qubit_calibration.ipynb
+jupyter nbconvert --to notebook --execute --inplace examples/single_qubit_autocalibrate.ipynb
 ```
 
-or execute a notebook headless:
+or open them interactively:
 
 ```bash
-uv run --project software/python jupyter nbconvert --to notebook --execute examples/01_pulse_train_dac0.ipynb
+jupyter lab examples/
 ```
 
-Needs `verilator` and the RV32I `clang` on `PATH` (the co-sim shells out to them). The first run
-elaborates + Verilates the DUT (~1–2 min); later runs reuse it. (Plain
-`pip install -e "software/python[cosim]"` plus your own jupyter/matplotlib works too.)
+Each notebook takes roughly 2–3 minutes headless (deliberately small sweep point/shot counts — the
+point is convergence to known truth, not fine sweeps).
+
+## Requirements
+
+- `riscq` installed (`pip install -e software`) with its deps (numpy, scipy, Pyro5), plus `qutip`
+  (the `TwoLevelModel` physics), `matplotlib`, and `jupyter`.
+- `verilator` and the riscv LLVM toolchain (`riscv64-unknown-elf-clang` + binutils) on `PATH` —
+  the co-sim Verilates the SoC and cross-compiles the on-core kernels. The first run
+  elaborates + Verilates the DUT (~1–2 min); later runs reuse the cached build under
+  `software/build/sim-2q/`.

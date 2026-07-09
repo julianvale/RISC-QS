@@ -22,8 +22,8 @@ datapath are inside the per-qubit fibers, and the converter wiring is in the boa
 ```
   io.axi (100 MHz host) ──▶ Axi4ToTilelinkFiber ──▶ hostBus
                                                        ├─ per-core instruction RAM (direct)
-                                                       ├─ per-core gate-drive envelope RAM (WidthAdapter)
-                                                       ├─ per-core readout-drive envelope RAM
+                                                       ├─ per-core gate-drive envelope RAM (write-only, direct)
+                                                       ├─ per-core readout-drive / demod envelope RAM (write-only, direct)
                                                        ├─ robs readout buffers (WidthAdapter)
                                                        └─ host control block (reset / fromHost / timeOffset)
 
@@ -36,12 +36,14 @@ datapath are inside the per-qubit fibers, and the converter wiring is in the boa
 ## Structure
 
 **Host AXI bridge.** `Axi4ToTilelinkFiber(blockSize = 64)` converts `io.axi` to Tilelink and fans it to a
-`hostBus`. `blockSize` is set to the **widest** on-chip memory word in bytes (the 512-bit / 64-byte
-envelope line) so its `WidthAdapter` can negotiate a full-word transfer; narrow memories stay single-beat
-(each fiber's decoder restricts the size). Host fan-out targets, all derived from `SocMemoryMap` (offsets
-relative to each region bus): per-core instruction RAM (32-bit, direct), per-core gate-drive envelope RAM
-(wide → upsizing `WidthAdapter`), per-core readout-drive envelope RAM (32-bit at interp 16 → direct, else
-adapted), the `robs` readout buffers (wide → adapter), and the host control block.
+`hostBus`. `blockSize` covers the widest full-word transfer any slave negotiates (the `robs`
+`WidthAdapter`'s 128-bit / 16-byte line); each fiber's decoder restricts the size down to what it supports.
+Host fan-out targets, all derived from `SocMemoryMap` (offsets relative to each region bus): per-core
+instruction RAM (32-bit, direct) and the three **write-only** envelope RAMs (gate / readout-drive / demod),
+each a [`BramWriteFiber`](BramWriteFiber.md) whose `TileLinkMemWriteLogic` steers a 32-bit host beat into
+the addressed sub-word lane of its wide line — so all three wire **direct** to their narrow region bus with
+no `WidthAdapter`. The `robs` readout buffers (host-readable → still a read/write `BramFiber` + adapter) and
+the host control block complete the fan-out.
 
 **Shared batch clock, host-gated.** A free-running `refTime` (64-bit, gated by `riscqReset`) plus a
 host-written `timeOffset` form `syncTime`; the low 32 bits become the `time` broadcast. Crucially each
@@ -90,6 +92,11 @@ the identical cores' shared host-load logic into a MUXF7/F8 macro straddling two
   timing-closure stack (every flag RVLS-bit-exact). See [`RISCV.md`](../riscv/RISCV.md).
 - **`readoutInterp` / `gateInterp`** — envelope interpolation factors that shrink the widest BRAM banks.
 - **`converterPipe`** — extra register stages on the DAC/ADC converter boundary.
+- **dsp-fmax lever** (specs/dsp-fmax.md, default off / bit-exact, set per build in the config JSON):
+  `adcPipe` (C2, the RFDC-edge ADC pipe depth, default 3). (The B1-alt param-buffer distributed RAM,
+  the B2 dcOffset MAX_FANOUT cap and the B3 queue lean-pop are baked into `PulseParamBuffer`/`TimedQueue`;
+  the C1 registered head (`regHead`) is a [TimedQueue](../dsp/TimedQueue.md)-level option, no longer
+  plumbed through the SoC.)
 
 ## RTL generation
 

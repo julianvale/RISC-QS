@@ -78,7 +78,7 @@ the base core's CSR-write and forwarding cones.
 [MulSim](../../src/riscq/riscv/sim/MulSim.scala) self-checks random + signed/unsigned corner operands
 and ALU/MUL forwarding against a Scala golden model; the `rv32um-p-{mul,mulh,mulhsu,mulhu}` ELFs run
 under RVLS/Spike in [RvTestSim](../../src/riscq/riscv/sim/RvTestSim.scala) (the probe advertises
-`RV32IM` to Spike when `withMul`, otherwise the M ops decode as illegal). All 43 tests pass (39
+`RV32I_Zmmul` to Spike when `withMul`, otherwise the multiply ops decode as illegal). All 43 tests pass (39
 `rv32ui-p` + 4 `rv32um-p` mul group).
 
 ```bash

@@ -16,6 +16,8 @@ case class PulseGeneratorParams(
                                    // vs a register array (true = recover the higher-fmax FIFO).
     queueForFMax: Boolean = false, // TimedQueue FIFO pointers: plain binary (default — fewer control
                                    // sets) vs fmax-tuned gray/empty-tracker (true).
+    queueImpl: TimedQueueImpl = TimedQueueImpl.SrlShadow, // TimedQueue microarchitecture — see
+                                   // [[TimedQueueImpl]] for the congestion/II trade of each option.
     memLatency: Int = 2,  // envelope mem: cmd → rsp cycles
     timeOffset: Int = 0,  // external calibration: adds to every lead time
     prescaleAmp: Boolean = true, // software prescales amp by 1/K ⇒ both CORDICs drop the gain stage
@@ -95,7 +97,8 @@ case class PulseGenerator(p: PulseGeneratorParams) extends Component {
 
   // ── six TimedQueues, each pushed from its io Flow with io.startTime ──
   def mkQueue[T <: Data](dt: HardType[T], lead: Int): TimedQueue[T] = {
-    val q = TimedQueue(dt, p.timeWidth, p.queueDepth, lead, p.timeOffset, p.queueUseVec, p.queueForFMax)
+    val q = TimedQueue(dt, p.timeWidth, p.queueDepth, lead, p.timeOffset, p.queueUseVec, p.queueForFMax,
+      impl = p.queueImpl)
     q.io.time := io.time
     q
   }

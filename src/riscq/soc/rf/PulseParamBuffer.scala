@@ -20,6 +20,8 @@ case class PulseTableTerm(dataWidth: Int, envWidth: Int, durWidth: Int) extends 
  *
  *   - `fire`@0x0        — write the table index `outId` ⇒ enqueue that entry at the current `startTime`
  *   - `freq`@0x4        — shared carrier frequency (16-bit field at bit 16)
+ *   - `dcOffset`@0x8    — DC bias added to the real output lanes downstream (16-bit field at bit 16)
+ *   - `phaseOffset`@0xC — virtual-Z phase added to the generator's phase input downstream (16-bit field at bit 16)
  *   - `table[i]`        — entry `i` at `(i+1)*0x10`: `+0` phase, `+4` amp, `+8` env, `+12` dur
  *   - `startTime`@0x4100 — this buffer's own `startTime` register (per-buffer, posted)
  */
@@ -32,14 +34,23 @@ case class PulseParamBufferParams(
     addrWidth: Int = 16,         // RfCmd address width (the buffer's RF sub-window)
     fireAddr: Int = 0x0,
     freqAddr: Int = 0x4,
+    dcOffsetAddr: Int = 0x8,     // per-buffer DC bias for the real output lanes (16-bit field at bit 16)
+    phaseOffsetAddr: Int = 0xC,  // per-buffer virtual-Z phase added to the generator's phase input (16-bit field at bit 16)
     startTimeAddr: Int = 0x4100,
     pulseOffset: Int = 0x10,     // 4 words per table entry; entry i at (i+1)*pulseOffset
     bitOffset: Int = 16,         // 16-bit fields packed in data[31:16]
-    useMem: Boolean = false      // table storage: false = FF Vec register file; true = distributed-RAM Mem
+    useMem: Boolean = true       // table storage: true (default) = distributed-RAM Mem; false = FF Vec
+                                 // register file. Clamped to a register file when pulseNum = 1 (a depth-1
+                                 // table has no address, e.g. ro/demod) — see `memTable` in the body.
 ) {
   require(pulseNum >= 1)
   require(addrWidth >= log2Up(startTimeAddr + 1), "addrWidth too small for startTimeAddr")
-  require(!useMem || pulseNum >= 2, "useMem table needs pulseNum >= 2 (a depth-1 Mem has no address)")
+  // the parallel cmd decode splits the address at the 16-byte slot boundary (slot = address >> 4,
+  // field = address[3:2]), so the layout must respect it:
+  require(pulseOffset == 16, "table decode assumes 4-word (16-byte) entry slots")
+  require(Seq(fireAddr, freqAddr, dcOffsetAddr, phaseOffsetAddr).forall(_ < pulseOffset),
+    "scalar registers must sit in slot 0, below the table")
+  require(startTimeAddr >= (pulseNum + 1) * pulseOffset, "startTimeAddr must sit past the table slots")
 }
 
 /**
@@ -67,6 +78,8 @@ case class PulseParamBuffer(p: PulseParamBufferParams) extends Component {
     val freq      = master port Flow(SInt(w bits))
     val time      = out    port UInt(timeWidth bits)     // local copy → pg.io.time
     val startTime = out    port UInt(timeWidth bits)     // per-buffer, cmd-written → pg.io.startTime
+    val dcOffset  = out    port SInt(w bits)             // per-buffer, cmd-written → real-lane DC bias
+    val phaseOffset = out  port SInt(w bits)             // per-buffer, cmd-written → generator phase-input bias (virtual Z)
   }
 
   // local low-fanout time copy: equal pipeline delay across buffers ⇒ same-startTime same-cycle rise.
@@ -77,32 +90,52 @@ case class PulseParamBuffer(p: PulseParamBufferParams) extends Component {
   def field(width: Int): Bits = cmd.payload.data(bitOffset, width bits)
 
   val startTime = Reg(UInt(timeWidth bits)) init 0
-  io.startTime := startTime
+  // One export stage (spec 09 B0): a fired pulse reaches the timed-queue push 2 cycles after its
+  // fire beat and the queues sample io.startTime at push, so this RegNext makes each fired pulse
+  // capture the register as of its own fire beat (pre-increment) and back-to-back fires each
+  // capture the running sum. See the auto-advance block after `outParam` below.
+  io.startTime := RegNext(startTime)
+
+  val dcOffset = Reg(SInt(w bits)) init 0
+  // MAX_FANOUT cap (baked in, specs/dsp-fmax.md B2): Vivado replicates this quasi-static bias register
+  // next to the consuming output-lane adders instead of routing one net across the channel's DSP
+  // columns. Zero semantic change. On buffers whose dcOffset is unused (demod) it rides a pruned reg.
+  dcOffset.addAttribute("MAX_FANOUT", 4)
+  io.dcOffset := dcOffset
+
+  val phaseOffset = Reg(SInt(w bits)) init 0
+  io.phaseOffset := phaseOffset
 
   val outId = Reg(UInt(log2Up(pulseNum) bit)) init 0
 
   // ── cmd decode (combinational on address; cmd is the posted Flow, already a registered handoff).
-  // The table write is decoded into a (enable, index, which-field) request shared by both storage
-  // styles; only one field of one entry is written per beat (the `is` arms are mutually exclusive). ──
-  val outParamValid = False
-  val tWrEn  = False                                          // table write enable
-  val tWrIdx = UInt(log2Up(pulseNum) bit); tWrIdx := outId    // table write index (don't-care default)
-  val (wrPhase, wrAmp, wrEnv, wrDur) = (False, False, False, False)
-  when(cmd.valid) {
-    switch(cmd.payload.address) {
-      is(fireAddr) {
-        if (pulseNum > 1) outId := cmd.payload.data(0, log2Up(pulseNum) bits).asUInt
-        outParamValid := True
-      }
-      is(startTimeAddr) { startTime := cmd.payload.data(0, timeWidth bits).asUInt }
-      for (i <- 0 until pulseNum) {
-        is((i + 1) * pulseOffset + 0)  { tWrEn := True; tWrIdx := i; wrPhase := True }
-        is((i + 1) * pulseOffset + 4)  { tWrEn := True; tWrIdx := i; wrAmp   := True }
-        is((i + 1) * pulseOffset + 8)  { tWrEn := True; tWrIdx := i; wrEnv   := True }
-        is((i + 1) * pulseOffset + 12) { tWrEn := True; tWrIdx := i; wrDur   := True }
-      }
-    }
-  }
+  // The target address windows are disjoint, so every register decodes the Flow in parallel — the
+  // scalar registers (fire / startTime / dcOffset / phaseOffset, and freq below) each cost one
+  // exact-match compare, and the table write is split by address: entry i occupies the 16-byte slot
+  // at (i+1)*pulseOffset, so the slot index is address>>4 (one range compare) and the written field
+  // is address[3:2] (word offsets +0/+4/+8/+12) — not 4*pulseNum full-address comparators. Upstream
+  // traffic is word-aligned 4-byte Puts (RfLinkBridge), so address[1:0] is always 0. ──
+  val addr = cmd.payload.address
+  def hit(a: Int): Bool = cmd.valid && addr === a
+
+  val outParamValid = hit(fireAddr)
+  if (pulseNum > 1) when(outParamValid) { outId := cmd.payload.data(0, log2Up(pulseNum) bits).asUInt }
+
+  val explicitStartWrite = hit(startTimeAddr)   // also gates the fire auto-advance below (explicit wins)
+  when(explicitStartWrite)   { startTime   := cmd.payload.data(0, timeWidth bits).asUInt }
+  when(hit(dcOffsetAddr))    { dcOffset    := field(w).asSInt }
+  when(hit(phaseOffsetAddr)) { phaseOffset := field(w).asSInt }
+
+  // table write request, shared by both storage styles; only one field of one entry per beat.
+  val slot   = addr >> log2Up(pulseOffset)                  // table slot: entry i lives in slot i+1
+  val tWrEn  = cmd.valid && slot =/= 0 && slot <= pulseNum  // table write enable
+  val tWrIdx = UInt(log2Up(pulseNum) bit)                   // table write index
+  tWrIdx := (slot - 1).resized  // don't-care outside tWrEn (the rmw read of a garbage index is discarded)
+  val fieldSel = addr(3 downto 2)                           // word within the slot
+  val wrPhase = fieldSel === 0
+  val wrAmp   = fieldSel === 1
+  val wrEnv   = fieldSel === 2
+  val wrDur   = fieldSel === 3
 
   // ── pulse table: `pulseNum` PulseTableTerm entries, reset/init to zero so an un-programmed (or
   // spurious reset-window) fire reads a benign dur=0. Two bit-identical storage styles:
@@ -112,7 +145,10 @@ case class PulseParamBuffer(p: PulseParamBufferParams) extends Component {
   //           written per beat, so the other fields are read back and re-stored). ──
   val zeroTerm = PulseTableTerm(w, envAddrWidth, durWidth).getZero
   val outParam = PulseTableTerm(w, envAddrWidth, durWidth)    // the fired entry, read by outId
-  if (!useMem) {
+  // Mem storage only where the table is addressable; a depth-1 table (pulseNum = 1) stays a register
+  // file regardless of the requested `useMem`, since a depth-1 Mem has no address.
+  val memTable = useMem && pulseNum >= 2
+  if (!memTable) {
     val table = Vec.fill(pulseNum)(Reg(PulseTableTerm(w, envAddrWidth, durWidth)) init zeroTerm)
     outParam := table(outId)
     when(tWrEn) {
@@ -133,12 +169,22 @@ case class PulseParamBuffer(p: PulseParamBufferParams) extends Component {
     table.write(tWrIdx, rmw, tWrEn)
   }
 
-  // fire path: writing outId pulses the selected entry into the param flows — Reg(Flow) + Delay
+  // shared post-fire beat marker: outId/outParam settle the cycle after the fire beat, so this one
+  // register both applies the B0 auto-advance and times the outParamFlow pulse below.
+  val fired = RegNext(outParamValid) init False
+
+  // spec 09 B0: a fire advances startTime by the fired entry's dur, applied the beat AFTER the
+  // fire beat. An explicit startTime write that beat wins (the !explicitStartWrite guard).
+  when(fired && !explicitStartWrite) {
+    startTime := startTime + outParam.dur.asUInt
+  }
+
+  // fire path: writing outId pulses the selected entry into the param flows — Reg(Flow) + `fired`
   // staging so the pulse is bit-exact vs the PulseGenerator golden.
   val outParamFlow  = Reg(Flow(PulseTableTerm(w, envAddrWidth, durWidth)))
   outParamFlow.valid init False                       // reset-clean: no X-driven spurious fire at t=0
   outParamFlow.payload := outParam
-  outParamFlow.valid   := Delay(outParamValid, 1, init = False)
+  outParamFlow.valid   := fired
   KeepAttribute(outParamFlow)
 
   // freq is a separate always-driven flow (posted write; pulses valid on the freq write, like driveFlow).
@@ -147,8 +193,7 @@ case class PulseParamBuffer(p: PulseParamBufferParams) extends Component {
   // startTime, which is NOT rewritten between the freq write and the fire, so the +1-cycle delay is
   // timing-invisible (the timed queue still captures the same startTime ⇒ bit-exact). valid inits False —
   // reset-clean, no X-driven spurious freq push at t=0 (mirrors outParamFlow above).
-  val freqValid = cmd.valid && (cmd.payload.address === freqAddr)
-  io.freq.valid   := RegNext(freqValid) init False
+  io.freq.valid   := RegNext(hit(freqAddr)) init False
   io.freq.payload := RegNext(field(w).asSInt)
 
   // fire the popped table entry into the generator's queues.

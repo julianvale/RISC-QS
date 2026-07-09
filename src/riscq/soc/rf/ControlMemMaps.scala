@@ -36,13 +36,3 @@ case class TimeMemMap(externalTime: UInt) extends Area {
     }
   }
 }
-
-/**
- * [[HostMemMap]] exposes the host→CPU mailbox at `0x2000`: a read returns the host-written `fromHost`
- * word (registered for the host→dsp crossing upstream). The control software polls it for commands.
- */
-case class HostMemMap(fromHost: Bits) extends Area {
-  def mapping(factory: tilelink.SlaveFactory): Unit = {
-    factory.read(RegNext(fromHost), 0x2000)
-  }
-}

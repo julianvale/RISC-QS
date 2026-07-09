@@ -9,10 +9,13 @@ import scala.io.Source
  * dual-port RAM with per-byte write enables and `NBPIPE` output pipeline registers, sized by the
  * `AWIDTH` / `DWIDTH` / `NUM_COL` (byte columns) / `NBPIPE` generics. Drive it through [[Uram]].
  *
- * Read latency (address → `dout`) is `NBPIPE + 1` cycles (one memory-read register + `NBPIPE`
- * output pipeline stages); the template gates each stage on a delayed copy of `mem_en`.
+ * Read latency: the template chains `NBPIPE + 2` registers — one memory-read register (`memreg`),
+ * `NBPIPE` pipeline stages, AND the `dout` output register — each gated on a delayed copy of
+ * `mem_en`. So data presented with the address in cycle 0 is stable on `dout` in cycle
+ * `NBPIPE + 2` — one cycle LATER than a Bram with its output register (1 + outReg). Bus fibers
+ * must be told this exact latency (see `TileLinkCpuMemLogic`).
  */
-case class UramBlackBox(dataWidth: Int, addressWidth: Int, pipeNum: Int = 3) extends BlackBox {
+case class xilinx_ultraram_true_dual_port_bytewrite(dataWidth: Int, addressWidth: Int, pipeNum: Int = 3) extends BlackBox {
   val maskWidth = dataWidth / 8
   addGeneric("AWIDTH", addressWidth)
   addGeneric("NUM_COL", maskWidth)
@@ -45,7 +48,8 @@ case class UramBlackBox(dataWidth: Int, addressWidth: Int, pipeNum: Int = 3) ext
  * Typed true dual-port UltraRAM: wraps [[UramBlackBox]] with two `MemReadWritePort[T]` slave ports
  * (one per UltraRAM port), translating the generic `MemReadWritePort` handshake to the template's
  * byte-write interface. A port writes byte `i` when `enable && write && mask(i)`, and reads
- * `NBPIPE + 1` cycles after the address is presented (`enable`, `write` low).
+ * `NBPIPE + 2` cycles after the address is presented (`enable` high, `write` low) — see the
+ * blackbox note above.
  *
  * @param dataType      payload type; its bit width must be a multiple of 8 (per-byte mask).
  * @param addressWidth  address width in bits.
@@ -55,7 +59,7 @@ case class Uram[T <: Data](dataType: T, addressWidth: Int, pipeNum: Int = 3) ext
   val bitsWidth = dataType.getBitsWidth
   assert(bitsWidth % 8 == 0, "dataWidth must be a multiple of 8")
   val maskWidth = bitsWidth / 8
-  val uram = UramBlackBox(bitsWidth, addressWidth, pipeNum)
+  val uram = xilinx_ultraram_true_dual_port_bytewrite(bitsWidth, addressWidth, pipeNum)
   val io = new Bundle {
     val port0 = slave port MemReadWritePort(dataType, addressWidth, maskWidth = maskWidth)
     val port1 = slave port MemReadWritePort(dataType, addressWidth, maskWidth = maskWidth)

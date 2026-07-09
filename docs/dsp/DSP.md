@@ -102,8 +102,9 @@ Pulse-side modules (in `riscq.dsp.pulse`, built from the above):
 - [`PulseGenerator`](PulseGenerator.md) / [`PulseGeneratorAligned`](PulseGeneratorAligned.md) — the
   complex-envelope pulse datapath (CORDIC rotation × envelope) with the exact `[startTime,
   startTime+dur)` valid window.
-- [`ReadoutDecoder`](ReadoutDecoder.md) / [`DemodCarrierGenerator`](DemodCarrierGenerator.md) — demod
-  against a reference carrier, windowed integrate, 1-bit discrimination.
+- [`ReadoutDecoder`](ReadoutDecoder.md) — demod against a reference carrier (an envelope-shaped
+  [`PulseGenerator`](PulseGenerator.md) pulse in the SoC), integrate over the carrier's own valid
+  window (the carrier triggers the decoder), 1-bit discrimination.
 - [`TimedQueue`](TimedQueue.md) — the time-ordered command scheduler shared by the pulse side.
 
 Arithmetic-mapping reference: [DSP48.md](DSP48.md) — how SpinalHDL multiply/multiply-add pipelines

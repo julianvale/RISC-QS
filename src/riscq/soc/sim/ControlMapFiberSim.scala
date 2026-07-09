@@ -9,17 +9,16 @@ import spinal.lib.bus.tilelink.fabric.MasterBus
 import spinal.lib.bus.tilelink.sim.{IdAllocator, IdCallback, MasterAgent}
 import spinal.lib.bus.misc.SizeMapping
 import riscq.soc.fabric.MemMapFiber
-import riscq.soc.rf.{TimeMemMap, HostMemMap}
+import riscq.soc.rf.TimeMemMap
 
 /**
- * Sign-off for the qubit-core control block ([[MemMapFiber]] + [[TimeMemMap]] + [[HostMemMap]] +
+ * Sign-off for the qubit-core control block ([[MemMapFiber]] + [[TimeMemMap]] +
  * `startTime`), driven over Tilelink with a `MasterAgent`. Pins down the CPU-visible control register
  * map and the `waitTimeCmp` halt — the spin-wait the scheduling software blocks on until the batch clock
  * reaches a scheduled instant:
  *
  *   - `time`@0xbff8 reads the (registered) external batch time;
  *   - `timeCmp`@0x4000 read/writes the compare value; `startTime`@0x4100 is write-only;
- *   - `fromHost`@0x2000 reads the host mailbox word;
  *   - `waitTimeCmp`@0x4008 is a read that '''halts''' the bus until `time + 3 ≥ timeCmp`.
  *
  * Run with `./.metals/mill runMain riscq.soc.sim.ControlMapFiberSim`.
@@ -33,11 +32,9 @@ object ControlMapFiberSim extends App {
           get = tilelink.SizeRange.upTo(0x40), putFull = tilelink.SizeRange.upTo(0x40),
           putPartial = tilelink.SizeRange.upTo(0x40))))))))
     val externalTime = in port UInt(32 bits)
-    val fromHost     = in port Bits(32 bits)
 
     val mm = MemMapFiber(addressWidth = 22, dataWidth = 32)
     val timeMemMap = TimeMemMap(externalTime); mm.addMapping(timeMemMap.mapping)
-    val hostMemMap = HostMemMap(fromHost);     mm.addMapping(hostMemMap.mapping)
     val startTime = Reg(UInt(32 bit)) init 0
     mm.addMapping { factory => factory.write(startTime, 0x4100) }
     mm.up at 0 of tlBus.node
@@ -48,7 +45,7 @@ object ControlMapFiberSim extends App {
   SimConfig.compile(Dut()).doSim("controlMap", seed = 42) { dut =>
     val cd = dut.clockDomain
     cd.forkStimulus(10)
-    dut.externalTime #= 0; dut.fromHost #= 0
+    dut.externalTime #= 0
     implicit val idAllocator = new IdAllocator(DebugId.width)
     implicit val idCallback  = new IdCallback
     val agent = new MasterAgent(dut.tlBus.node.bus, cd)
@@ -67,20 +64,16 @@ object ControlMapFiberSim extends App {
     agent.putInt(0, 0x4100, 777); cd.waitSampling(3)
     assert(dut.startTimeOut.toBigInt == 777, "startTime write")
 
-    // ── fromHost mailbox read ──
-    dut.fromHost #= 0xdeadbeefL; cd.waitSampling(3)
-    assert((agent.getInt(0, 0x2000) & 0xFFFFFFFFL) == 0xdeadbeefL, "fromHost read")
-
     // ── waitTimeCmp halt: timeCmp far in the future; the read must block until externalTime catches up.
     agent.putInt(0, 0x4000, 200); cd.waitSampling(2)        // timeCmp = 200
-    dut.externalTime #= 50                                   // 50 + 3 < 200 ⇒ should halt
+    dut.externalTime #= 50; cd.waitSampling(3)              // settle waitTimeCmp true (50 + 3 < 200) before the halting read
     fork { var t = 50; while (true) { dut.externalTime #= t; cd.waitSampling(); t += 1 } }
     val wv = agent.getInt(0, 0x4008)                         // HALTS until externalTime + 3 ≥ 200
     val tAfter = dut.externalTime.toBigInt
     assert(tAfter >= 197, s"waitTimeCmp released too early at externalTime=$tAfter (want ≥197)")
     assert((wv & 1) == 0, s"waitTimeCmp value should be false (released) but was $wv")
 
-    println(s"[ControlMapFiberSim] PASS: time/timeCmp/startTime/fromHost register map + waitTimeCmp halt " +
+    println(s"[ControlMapFiberSim] PASS: time/timeCmp/startTime register map + waitTimeCmp halt " +
       s"(released at externalTime=$tAfter).")
     simSuccess()
   }

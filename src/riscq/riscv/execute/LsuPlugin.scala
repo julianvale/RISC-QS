@@ -83,7 +83,13 @@ class LsuPlugin(p: RiscqParam) extends FiberPlugin {
       when(dBus.cmd.fire)   { cmdSent := True }
       when(dBus.rsp.valid)  { rspGot := True; rspData := dBus.rsp.data }  // rsp is a Flow; we're always ready
       when(down.isFiring)   { cmdSent := False; rspGot := False }   // reset at commit
-      haltWhen(active && !rspNow)
+      // E2 (baked in): the wrong-path `cancelled` (up.isCancel = the jumpAt mispredict) is kept OUT of
+      // the halt qualifier so it stops feeding the ready/CE spine. A cancelled load/store is only ever
+      // hit on its first execute cycle (no cmd in flight), and the flush clears this stage's valid next
+      // edge off the ready spine, so the one extra halted cycle sits inside the mispredict flush shadow —
+      // zero IPC. `cmd.valid`/`first`/`dbg` keep the `active` qualifier (no wrong-path bus traffic).
+      val haltActive = isValid && (isLoad || isStore)
+      haltWhen(haltActive && !rspNow)
 
       // ---- Command-address latch. The operands (rs1/rs2) arrive through the 1-deep bypass whose
       //      window is a single cycle, but a load/store *halts* this stage for the whole memory
@@ -101,10 +107,31 @@ class LsuPlugin(p: RiscqParam) extends FiberPlugin {
       val addrReg       = Reg(UInt(Global.XLEN bits))
       val storeDataReg  = Reg(Bits(Global.XLEN bits))
       when(first) { addrReg := liveAddr; storeDataReg := liveStoreData }
-      val addr      = first ? liveAddr      | addrReg            // stable from the first active cycle on
-      val rawStore  = first ? liveStoreData | storeDataReg
+      // B4 (baked in): the operand-snapshot pass-through select is `!latched` alone. `first`'s `active`
+      // term carries the jumpAt mispredict broadcast (via up.isCancel) into byteOff → shift → the 32-bit
+      // load-extend cone, which synthesis maps into per-bit FDSE set pins on the LOAD_DATA capture.
+      // Equivalent wherever the value is consumed: when active, `first == !latched`; when idle the live
+      // pass-through is unused (cmd.valid, the downstream valid and the dbg qualifier all gate on `active`).
+      val snapSel   = !latched
+      val addr      = snapSel ? liveAddr      | addrReg          // stable from the first active cycle on
+      val rawStore  = snapSel ? liveStoreData | storeDataReg
       val byteOff   = addr(1 downto 0)
       val shift     = (byteOff << 3).resize(5)                   // 0/8/16/24-bit lane offset
+
+      // E1 (baked in): the *load*-result down-shift is taken straight from the *registered* addrReg
+      // instead of riding the live effective-address mux. The load word is consumed only with the
+      // response, which arrives >=1 cycle after the first active cycle (dBus.rsp.valid implies latched;
+      // the >=1-cycle rsp contract, MemBus.md), by which time addrReg holds this access's address. This
+      // cuts SRC1/SRC2/DO_SUB -> the AGU adder -> addr(1:0) out of the 32-bit sign/zero-extend cone. The
+      // cmd/mask/store lanes keep `shift` (from the live `addr`) — they must issue on the first cycle.
+      // Equivalent wherever consumed: when the load fires latched is set, so addrReg(1:0) == addr(1:0).
+      val loadShift = (addrReg(1 downto 0) << 3).resize(5)
+      // The contract this relies on, checked in simulation only (absent from synthesis): a response
+      // never arrives on the load's first active cycle, so addrReg is valid when `word` is used.
+      GenerationFlags.simulation {
+        assert(!(dBus.rsp.valid && !latched),
+          "dBus.rsp answered before the command was latched — violates the >=1-cycle rsp contract the load-shift relies on")
+      }
 
       // ---- Command (word-sized, word-aligned, byte-masked). ----
       val sizeBytes = Bits(dBus.p.dataBytes bits)
@@ -124,7 +151,7 @@ class LsuPlugin(p: RiscqParam) extends FiberPlugin {
 
       // ---- Load result: shift the addressed bytes down, then sign/zero-extend per funct3. ----
       val word    = rspGot ? rspData | dBus.rsp.data
-      val shifted = (word |>> shift).resize(32)
+      val shifted = (word |>> loadShift).resize(32)
       val byte    = shifted(7 downto 0)
       val half    = shifted(15 downto 0)
       val loaded  = Bits(32 bits)

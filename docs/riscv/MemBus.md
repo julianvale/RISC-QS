@@ -57,6 +57,23 @@ load's word, or a store's ack with don't-care data), and the LSU is single-outst
 **halts** until the response arrives — so the master is always ready for its one outstanding
 response. No `ready` is needed on the response path.
 
+### The ≥1-cycle response contract
+
+`rsp.valid` is **never asserted in the same cycle its command is presented** — the response for an
+access always arrives at least one cycle after that access's *first active execute cycle*. Every
+backend honours it: the sim model ([SimMem](../../src/riscq/riscv/sim/SimMem.scala)) answers after a
+random **1–3-cycle** latency; in the SoC the [posted-store shim](../soc/ARCH.md) registers its
+write-ack and the fabric d-channel is `s2mPipe`-registered, and the on-chip RAM is a
+synchronous-read [`DualClockRam`](../memory/README.md) (≥1-cycle read). A zero-latency (combinational)
+memory model would violate the contract.
+
+The [LSU](LsuPlugin.md)'s registered load-shift (riscv-fmax spec §5 E1, **baked in**) relies on it: it
+takes the load-result byte-lane down-shift off the live effective-address adder and derives it from the
+*registered* `addrReg` instead, which is correct only because the response can't beat the address
+latch (`dBus.rsp.valid` implies the command was already `latched`, so `addrReg` holds this access's
+address by the time the load word is consumed). LsuPlugin carries a simulation-only assert of exactly
+that (`dBus.rsp.valid` ⇒ `latched`) so any future 0-latency backend trips it immediately.
+
 `DataMemBusParam(addressWidth, dataWidth)` is XLEN-wide on address (the data bus reaches the whole
 SoC map) and 32-bit on data; `dataBytes` is the byte-mask lane width. Keeping the LSU on this
 bundle leaves it free of the full Tilelink A/D-channel boilerplate; the Tilelink-ization (and any

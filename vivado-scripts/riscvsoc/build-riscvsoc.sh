@@ -24,7 +24,7 @@
 set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
-VIVADO_BIN="${RISCQ_VIVADO_BIN:-/opt/Xilinx/Vivado/2024.2/bin}"
+VIVADO_BIN="${RISCQ_VIVADO_BIN:-$(dirname "$(command -v vivado)")}"
 QUBITS="${RISCQ_QUBITS:-14}"
 # One folder per design under the repo-root build/ (git-ignored); RISCQ_PROJ_NAME picks the folder so
 # several designs build in parallel. RTL + checkpoints + reports + vivado.log all land here.

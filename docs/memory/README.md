@@ -15,6 +15,7 @@ ports so the two sides never have to arbitrate for access.
 | [`DualClockRam`](DualClockRam.md) | block RAM | **two** (fastCd / slowCd) | **inferred** from a SpinalHDL `Mem` (`ram_style`) | you want a clock-crossing BRAM with no vendor template — the default on-chip RAM |
 | [`Bram`](Bram.md) | block RAM | **two** (fastCd / slowCd) | **blackbox** over a Xilinx HDL template (`BramBlackBox.v`) | you want explicit control of the BRAM template / output-register stage |
 | [`Uram`](Uram.md) | UltraRAM | **one** (shared) | **blackbox** over a Xilinx HDL template (`UramBlackBox.v`) | you need deep/dense storage and BRAM is scarce — but you do **not** need a clock crossing |
+| [`HalfUram`](HalfUram.md) | UltraRAM | **one** (shared) | width adapter over a 64-bit [`Uram`](Uram.md) | you want a **32-bit** URAM array at **half the primitives** — packs two 32-bit words per 64-bit row |
 
 `DualClockRam` and `Bram` are interchangeable on the surface: both are true-dual-port, two-clock,
 byte-write, and `Bram` deliberately mirrors `DualClockRam`'s `fastPort` / `slowPort` naming so it is a
@@ -22,7 +23,9 @@ drop-in. The difference is `DualClockRam` lets Vivado **infer** the BRAM from a 
 `.v` to maintain), whereas `Bram` **wraps an explicit Xilinx template** so you get its exact
 write-first / output-register behaviour. `Uram` is the odd one out: the UltraRAM primitive is
 **single-clock**, so it cannot itself bridge two clock domains — it trades the clock crossing for
-much deeper, denser storage.
+much deeper, denser storage. [`HalfUram`](HalfUram.md) wraps a 64-bit `Uram` in a width adapter to
+present a 32-bit port at twice the depth (two words per row), so a 32-bit array costs half as many
+URAM primitives; it inherits `Uram`'s single-clock constraint and read latency.
 
 ## Common theme: true dual-port + byte masks
 
@@ -55,6 +58,7 @@ model and asserts **bit-exact** read-back. The shared checks:
 mill runMain riscq.memory.sim.DualClockRamSim
 mill runMain riscq.memory.sim.BramSim
 mill runMain riscq.memory.sim.UramSim
+mill runMain riscq.memory.sim.HalfUramSim
 ```
 
 **Load-bearing sim gotcha — `-Wno-MULTIDRIVEN`.** A true dual-port RAM is **one storage array written
@@ -69,6 +73,7 @@ block.
 - [DualClockRam](DualClockRam.md) — `Mem`-inferred true-dual-port, dual-clock, byte-write BRAM.
 - [Bram](Bram.md) — blackbox over the Xilinx true-dual-port two-clock BRAM template.
 - [Uram](Uram.md) — blackbox over the Xilinx single-clock true-dual-port UltraRAM template.
+- [HalfUram](HalfUram.md) — width adapter over a 64-bit `Uram`: a 32-bit port at twice the depth (two words per row).
 
 These blocks are wired into the SoC through fibers — see
 [`DualClockRamFiber`](../soc/DualClockRamFiber.md), [`BramFiber`](../soc/BramFiber.md), and the

@@ -183,6 +183,7 @@ adding it. If you need a barrier without the logic, register the DSP output expl
 | **Copy a shared C-port addend per consumer, one stage early** | each copy → that DSP's **CREG** (settled C register, not a combinational route-through); producer fanout = #consumers | `ComplexMul` `MCR`/`MCI` (§3.3) |
 | **Keep a fabric consumer / register on the DSP output** | register barrier caps the cascade; *register the output* if the only consumer is a clamp/slice | `ComplexMul` clamp, registered for sat (§3.4/§4) |
 | **`signal.addAttribute("use_dsp", "no")`** | force a multiply into fabric (LUT/CARRY8) — 0 DSP | CORDIC `1/K` KCM (fabric shift-add) |
+| **`signal.addAttribute("use_dsp", "yes")` on the PRODUCT registers** | pin a multiply into a DSP48 — overrides the global DSP balancer, which silently demotes muls to fabric when device DSP demand nears ~65% (the 14q SoC's 2786 sat on that knife-edge; 18 decoder muls spilled to CARRY8 chains and the build collapsed). Scope it to the product signals only — module-level `use_dsp` also drags pre-adds/recombines into standalone DSPs (+425, NOFIT) | `ComplexMul` `m2`/`pre4`/`pim4` |
 | **`signal.addAttribute("max_fanout", n)`** | replicate a high-fanout *fabric* driver next to its loads | clamp-select net (fo=16, route-bound) — see §6 |
 | **Fold a round constant into an existing adder** | the `+½ ulp` rides a real adder, no extra stage/logic | CORDIC last micro-rotation |
 | **Add a pipeline stage** | break any over-long path; latency is auto-derived in our blocks | ComplexMul 5→6 |

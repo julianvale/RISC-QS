@@ -72,7 +72,6 @@ case class RiscqFarmTop(
       coreTime := coreTime + 1
       coreTime.addAttribute("DONT_TOUCH")
       riscvSoc.time     := coreTime
-      riscvSoc.fromHost := 0
 
       // ── dummy anchor: fold every posted cmd into a kept accumulator ──
       val cmdDn = keepPipe(riscvSoc.cmd, linkPipe)

@@ -25,12 +25,19 @@ import scala.collection.mutable
  */
 object PulseGeneratorSim extends App {
 
-  // queueUseVec/queueForFMax env-overridable to A/B the higher-fmax register FIFO; the defaults match
-  // the production default (lean distributed-RAM queue) so the standard run covers it.
+  // queue knobs env-overridable to A/B the FIFO variants and the dsp-fmax B3/C1 levers; the defaults
+  // match the production default (lean distributed-RAM queue, levers off) so the standard run covers it.
   def envB(k: String, d: Boolean) = sys.env.get(k).map(_.toBoolean).getOrElse(d)
+  val queueImpl = sys.env.getOrElse("RISCQ_QUEUE_IMPL", "RegHead") match {
+    case "RegHead"   => TimedQueueImpl.RegHead
+    case "Srl"       => TimedQueueImpl.Srl
+    case "Shadow"    => TimedQueueImpl.Shadow
+    case "SrlShadow" => TimedQueueImpl.SrlShadow
+  }
   val basep = PulseGeneratorParams(batchSize = 4, dataWidth = 16, timeWidth = 16,
     addrWidth = 6, durWidth = 8, queueDepth = 4, memLatency = 2,
-    queueUseVec = envB("RISCQ_QUEUE_USEVEC", false), queueForFMax = envB("RISCQ_QUEUE_FORFMAX", false))
+    queueUseVec = envB("RISCQ_QUEUE_USEVEC", false), queueForFMax = envB("RISCQ_QUEUE_FORFMAX", false),
+    queueImpl = queueImpl)
   val N     = basep.batchSize
   val w     = basep.dataWidth
   val amax  = (BigInt(1) << (w - 1)) - 1

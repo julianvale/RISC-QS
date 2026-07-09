@@ -3,7 +3,7 @@
 **Source:** [`src/riscq/riscv/`](../../src/riscq/riscv/) · **Package:** `riscq.riscv` · **Type:** plugin-on-a-host core
 
 The control processor at the heart of the project's signal-processing SoC: a single-issue,
-in-order, pipelined **RV32I** core in **SpinalHDL**, with an **optional M** (mul) extension.
+in-order, pipelined **RV32I** core in **SpinalHDL**, with an **optional Zmmul** (multiply-only) extension.
 It is built **from scratch** following VexiiRiscv's plugin + pipeline *patterns*
 (`ext/VexiiRiscv`) but deliberately stripped of its generality (no multi-lane, no RVC aligner,
 no MMU/PMP, no OoO machinery). It runs on Xilinx Virtex UltraScale+ `xczu49dr-ffvf1760-2-e`
@@ -166,7 +166,7 @@ Execute
 - [IntAluPlugin](IntAluPlugin.md) — the integer ALU.
 - [BranchPlugin](BranchPlugin.md) — branch/jump resolution + predictor correction.
 - [LsuPlugin](LsuPlugin.md) — the cacheless load/store unit (Tilelink dBus).
-- [MulPlugin](MulPlugin.md) — the optional M-extension multiply unit.
+- [MulPlugin](MulPlugin.md) — the optional Zmmul multiply unit.
 - [WriteBackPlugin](WriteBackPlugin.md) — the generic rd-source mux.
 
 System & verification

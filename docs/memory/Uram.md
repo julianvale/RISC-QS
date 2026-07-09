@@ -38,9 +38,10 @@ crossing, do it in a `DualClockRam`/`Bram` and keep the URAM inside one clock re
 
 ## Read latency
 
-Address → `dout` latency is **`NBPIPE + 1` cycles**: one memory-read register plus `NBPIPE` output
-pipeline stages, each gated by a delayed copy of `mem_en`. The extra pipe depth is what lets UltraRAM
-run fast despite its size; downstream alignment math depends on this latency being exact, so the sim
+Address → `dout` latency is **`NBPIPE + 2` cycles**: one memory-read register, `NBPIPE` output
+pipeline stages, and the `dout` output register, each gated by a delayed copy of `mem_en`. The extra
+pipe depth is what lets UltraRAM run fast despite its size; downstream alignment math depends on this
+latency being exact (bus fibers are told `pipeNum + 2` — see `TileLinkCpuMemFiber`), so the sim
 asserts it as a single spike.
 
 ## Interface & configuration
@@ -67,7 +68,7 @@ Ports: `io.port0` / `io.port1`, both in the current clock domain. See the source
 ## Usage
 
 ```scala
-val ram = Uram(Bits(32 bits), addressWidth = 7, pipeNum = 3) // 32-bit x 128, latency 4
+val ram = Uram(Bits(32 bits), addressWidth = 7, pipeNum = 3) // 32-bit x 128, latency 5
 ram.io.port0 <> a
 ram.io.port1 <> b
 ```
@@ -82,7 +83,7 @@ mill runMain riscq.memory.UramGen
 
 `riscq.memory.sim.UramSim` drives the wrapper **through Verilator against the committed
 `UramBlackBox.v`** (proving the `.v` matches the wrapper), checked against a software memory model on
-the `-2` RFSoC default clock: the exact `NBPIPE + 1` read latency (single spike), whole-array fill on
+the `-2` RFSoC default clock: the exact `NBPIPE + 2` read latency (single spike), whole-array fill on
 port 0 read back through **both** ports, byte masks, and a **concurrency** stress where port 0 writes
 the low half while port 1 reads the disjoint high half in the same cycles — all bit-exact.
 

@@ -34,13 +34,13 @@ case class RamOnFabricDut(plugins: Seq[Hostable], memDepth: Int, memOutReg: Bool
     withOutRegSlow = memOutReg
   )
 
-  val iBusFiber = TileLinkCpuMemFiber(ram.slowPort, withOutReg = memOutReg)
+  val iBusFiber = TileLinkCpuMemFiber(ram.slowPort, latency = 1 + memOutReg.toInt)
   iBusFiber.up at memOffset of riscqFiber.iBus
 
   // The posted-store adapter (writes acked locally, reads pass through) rides inside RiscqFiber on the
   // DataMemBus, exercising the full rv32ui-p suite (incl. store→load RAW) through the shim under RVLS
   // lock-step, with the verified LsuPlugin untouched.
-  val dBusFiber = TileLinkCpuMemFiber(ram.fastPort, withOutReg = memOutReg)
+  val dBusFiber = TileLinkCpuMemFiber(ram.fastPort, latency = 1 + memOutReg.toInt)
   dBusFiber.up at memOffset of riscqFiber.dBus
 }
 

@@ -15,3 +15,4 @@ simWorkspace
 ext/VexiiRiscv
 BASIC_MISTAKES.md
 /src/scratch
+.Xil/

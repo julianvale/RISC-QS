@@ -32,7 +32,7 @@ object RvTestSim extends App {
   val testDir = "ext/VexiiRiscv/ext/NaxSoftware/riscv-tests"
   def envFlag(name: String, default: Boolean): Boolean = sys.env.get(name)
     .map(s => s == "1" || s.equalsIgnoreCase("true")).getOrElse(default)
-  // RISCQ_WITH_MUL=1 builds the M unit and adds the rv32um-p-* tests (withMul now defaults off).
+  // RISCQ_WITH_MUL=0 drops the Zmmul multiply unit and its mul tests (withMul now defaults on).
   val withMul = envFlag("RISCQ_WITH_MUL", RiscqParam().withMul)
   // RISCQ_GSHARE_MEM=1 / RISCQ_CSR_WARL=1 exercise the resource-shrink levers (else off).
   val gshareMem = envFlag("RISCQ_GSHARE_MEM", RiscqParam().gshareMem)
@@ -48,6 +48,11 @@ object RvTestSim extends App {
   val lateWriteback = envFlag("RISCQ_LATE_WB", RiscqParam().lateWriteback)
   // RISCQ_PCREG_MAXFANOUT=N replicates pcReg (bit-exact attribute).
   val pcRegMaxFanout = sys.env.get("RISCQ_PCREG_MAXFANOUT").map(_.toInt).getOrElse(RiscqParam().pcRegMaxFanout)
+  // RISCQ_CSRCE_MAXFANOUT: the cap on the CSR commit qualifier (bit-exact attribute) — here so the RVLS
+  // gate can run with it ON.
+  val csrCommitMaxFanout = sys.env.get("RISCQ_CSRCE_MAXFANOUT").map(_.toInt).getOrElse(RiscqParam().csrCommitMaxFanout)
+  // The structural levers B3/B4/E1–E3 and the jumpAt (B2) / fetch (E4) MAX_FANOUT=16 caps are baked in
+  // (always on) — RVLS still gates them here, it just no longer needs an env toggle.
   // RISCQ_BTB_LATE=1 re-steers the BTB target a cycle late (off the PC self-loop; 1-bubble taken).
   val btbPredictLate = envFlag("RISCQ_BTB_LATE", RiscqParam().btbPredictLate)
   // RISCQ_PC_ONEHOT=1 selects the next PC one-hot (off by default = when-chain). Bit-exact.
@@ -65,8 +70,9 @@ object RvTestSim extends App {
   val param    = RiscqParam(withMul = withMul,
     gshareMem = gshareMem, csrWarl = csrWarl, aluFastAddOnly = aluFastAddOnly,
     lateWriteback = lateWriteback, pcRegMaxFanout = pcRegMaxFanout,
+    csrCommitMaxFanout = csrCommitMaxFanout,
     btbPredictLate = btbPredictLate, pcOneHotRedirect = pcOneHotRedirect,
-    lateBadTarget = lateBadTarget, skidAfter = skidAfter,
+    lateBadTarget = lateBadTarget, skidAfterOverride = Some(skidAfter),
     aluNoFastForward = aluNoFastForward, aluResultOneHot = aluResultOneHot,
     deriveImmFromWord = deriveImmFromWord, fetchPcWidth = fetchPcWidth)
 

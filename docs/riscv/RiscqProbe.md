@@ -39,7 +39,7 @@ commits for `livenessThreshold` cycles (default 16000), catching a hang.
 
 ## The lock-step contract (the non-obvious requirements)
 
-Spike runs **machine-only** (RV32I or RV32IM), which imposes three things the probe must get right or
+Spike runs **machine-only** (RV32I or RV32I_Zmmul), which imposes three things the probe must get right or
 the comparison diverges:
 
 - **`addRegion`.** RVLS/Spike treats every address as MMIO and faults on any fetch/load/store outside
@@ -48,9 +48,10 @@ the comparison diverges:
 - **`xlenExtend`.** Spike stores integer registers sign-extended to 64 bits even in RV32 mode, so a
   negative-looking 32-bit rd write (bit 31 set) must be widened the same way (`(v << 32) >> 32`)
   before it is compared, or every such write mismatches.
-- **The ISA string.** `add()` advertises `s"RV${xlen}I" + (if (p.withMul) "M" else "")` — i.e.
-  `RV32I` for the base core, `RV32IM` when `withMul` is on. If the string omits an enabled extension,
-  Spike decodes those opcodes as illegal and the M tests fault inside RVLS rather than the core. (Add
+- **The ISA string.** `add()` advertises `s"RV${xlen}I" + (if (p.withMul) "_Zmmul" else "")` — i.e.
+  `RV32I` for the base core, `RV32I_Zmmul` when `withMul` is on (multiply-only, no divide). If the
+  string omits an enabled extension, Spike decodes those opcodes as illegal and the multiply tests
+  fault inside RVLS rather than the core. (Add
   the matching letter for any future extension — VexiiRiscv does the same per-flag.)
 
 Separately, the CSRs riscq models as WARL stubs (`satp`, `pmp*`, …) require rvls to be **patched**

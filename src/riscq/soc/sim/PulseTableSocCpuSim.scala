@@ -20,8 +20,8 @@ import java.io.File
  * gate envelope; release the cores from reset over AXI (the host control block); then let the program
  * run — it reads `time`@0xbff8, writes `startTime = time + 1024`@0x4100, programs the gate-drive
  * table[0] and fires `outId` 0. We wait for the CPU to publish `startTime`, then assert the pulse
- * reaches physical DAC 8 (through the `dacMap` `AdderTree` reduction) for ≥ `dur` cycles and that `robs`
- * captures on fire — the pulse-reaches-DAC + fire-capture properties, now driven end-to-end by software.
+ * reaches physical DAC 8 (through the `dacMap` `AdderTree` reduction) for ≥ `dur` cycles — the
+ * pulse-reaches-DAC property, now driven end-to-end by software.
  *
  * No test-master master (`withTest = false`): the CPU is the sole `dBus` master, exactly as the real
  * SoC. Run with `./.metals/mill runMain riscq.soc.sim.PulseTableSocCpuSim`.
@@ -55,10 +55,12 @@ object PulseTableSocCpuSim extends App {
   require(elfFile.exists(), s"missing ${elfFile.getPath} — rebuild it per the header of sw/pulse_sched.S")
 
   SimConfig.addSimulatorFlag("-Wno-MULTIDRIVEN") // the clock-crossing Bram blackbox arrays are written from clka+clkb
+    .addSimulatorFlag("--x-initial 0")           // 0-init pre-reset X state (the host→dsp CDC FIFO, X until the first
+                                                 // host write) so it can't trip a spurious Tilelink decoder-miss —
+                                                 // mirrors PulseTableSocSim; on hardware this state powers up defined.
     .compile {
       val dut = PulseTableSoc(qubitNum, dacMap, adcMap, withTest = false)
       dut.riscqArea.time.simPublic()
-      dut.riscqArea.fire.simPublic()
       dut.riscqArea.riscqCores(0).startTime.simPublic()
       dut.riscqArea.riscqCores(0).gatePulse.valid.simPublic()
       dut
@@ -84,7 +86,8 @@ object PulseTableSocCpuSim extends App {
     // host bus-load: the program + gate envelope arrive over io.axi → the iMem / pulseMem fabric, exactly
     // as the real SoC loads them — a blackbox `Bram` has no SpinalHDL `Mem` to backdoor-poke. The instruction
     // and pulse-RAM host ports stay live while the cores are held in riscqReset, so the program is in place
-    // before the reset release below; each 32-bit lane is one 4-byte AXI write (WidthAdapter sub-word steer).
+    // before the reset release below; each 32-bit lane is one 4-byte AXI write (the write-only envelope
+    // fiber steers it to the addressed sub-word lane of the wider line).
     def leBytes(v: BigInt, n: Int): List[Byte] = List.tabulate(n)(i => ((v >> (8 * i)) & 0xFF).toByte)
     def loadInstr(core: Int, word: Int, v: BigInt): Unit =
       axi.write(BigInt(dut.map.coreMemOffset(core)) + word.toLong * 4, leBytes(v, 4))
@@ -125,22 +128,20 @@ object PulseTableSocCpuSim extends App {
     val dac8      = dut.io.dac(8)
     val gateValid = dut.riscqArea.riscqCores(0).gatePulse.valid
     val stopTime  = startTime + 60
-    var dacNonZeroRun = 0; var maxRun = 0; var sawFire = false; var gateValids = 0; guard = 0
+    var dacNonZeroRun = 0; var maxRun = 0; var gateValids = 0; guard = 0
     while (dut.riscqArea.time.toBigInt.toInt < stopTime && guard < 8000) {
       dspCd.waitSampling()
       guard += 1
-      if (dut.riscqArea.fire.toBoolean) sawFire = true
       if (gateValid.toBoolean) gateValids += 1
       if (dac8.payload.toBigInt != 0) { dacNonZeroRun += 1; maxRun = scala.math.max(maxRun, dacNonZeroRun) }
       else dacNonZeroRun = 0
     }
-    println(s"[PulseTableSocCpuSim] gate scheduled@$startTime: gateValids=$gateValids maxDacRun=$maxRun sawFire=$sawFire")
+    println(s"[PulseTableSocCpuSim] gate scheduled@$startTime: gateValids=$gateValids maxDacRun=$maxRun")
 
     assert(gateValids >= progDur, s"[M4 gate] gate pulse-generator valid run $gateValids < expected dur $progDur")
     assert(maxRun >= progDur, s"[M4 DAC] mapped DAC 8 non-zero run $maxRun < expected pulse dur $progDur")
-    assert(sawFire, "[M4 robs] no pulse-fire capture observed")
     println(s"[PulseTableSocCpuSim] PASS: the RISC-V program scheduled a gate pulse that drove DAC 8 " +
-      s"(non-zero run $maxRun ≥ dur=$progDur) and robs captured on fire — CPU-in-the-loop functional sign-off.")
+      s"(non-zero run $maxRun ≥ dur=$progDur) — CPU-in-the-loop functional sign-off.")
     simSuccess()
   }
 }

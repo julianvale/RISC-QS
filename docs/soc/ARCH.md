@@ -84,6 +84,14 @@ value to both buffers. Hardware backs this with one structural requirement — e
 copy has **equal pipeline delay** (one regional pipe → per-buffer `RegNext`, low fanout). Equal values
 plus equal delay ⇒ same cycle. The SoC sim / scheduling software must write both `startTime`s.
 
+**`startTime` also auto-advances on every fire** (spec 09 B0): a fire adds the fired entry's `dur` to that
+buffer's `startTime`, so a contiguous pulse train is one `set_start` + N−1 bare fires (an explicit
+`set_start` on the beat right after a fire overrides that increment — beat-order, absolute wins). The
+generator-facing export gained one **uniform** `RegNext` stage so each fired pulse captures `startTime` as
+of its own fire beat (pre-increment); because that stage is identical in every buffer and the `TimedQueue`
+still pops by the *captured* `startTime` value, absolute pulse timing stays bit-identical for all existing
+`set_start`+`fire` software — the same-cycle-rise contract above is unchanged.
+
 The constant link delay `D` makes the core's `time` copy read `dspTime − D`, so the CPU's
 `startTime = localTime + lead` fires at `dspTime + (lead − D)` — a constant, predictable effective lead.
 The invariant: `lead − D > down-link latency`. `waitTimeCmp` gains a few cycles of jitter, which is
@@ -113,7 +121,7 @@ The link's whole purpose is to let the placer separate two regions on the `xczu4
   is pinned here, away from the converters: just `RiscvSoc` (core + I/D RAM + control block + bridge +
   result sink) and nothing else.
 - **DSP region — columns X1–X5.** DSP-dense, tight against the converter edge (RFDAC/RFADC live on X5).
-  Holds the per-qubit datapath: the pulse-drive channels, the demod LO, the decoder, and the envelope
+  Holds the per-qubit datapath: the pulse-drive channels, the demod carrier, the decoder, and the envelope
   RAMs.
 
 The only thing spanning the two is the pipelined link, which can be as long as the die requires.

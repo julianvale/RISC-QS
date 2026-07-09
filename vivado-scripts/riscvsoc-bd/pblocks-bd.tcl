@@ -5,14 +5,15 @@
 #
 # Same floorplan as vivado-scripts/riscvsoc/pblocks-riscvsoc.tcl (docs/soc/floorplan_plan.md §11):
 #   - each RiscvSoc core (+ its replicated coreTime_i) → a hard SLICE band of its X0 row, 3 cores/row
-#     across Y3..Y7 (3,3,3,3,2), EXCLUDE_PLACEMENT per band, BRAM/DSP floated out;
+#     across Y3..Y7 (3,3,3,3,2), EXCLUDE_PLACEMENT per band, BRAM/DSP site-floated out, and the core's
+#     `mem` URAM kept out of the band by membership (X0 has no URAM column — see the core loop below);
 #   - the whole floating DSP/RF datapath → one hard CLOCKREGION_X1Y0:X5Y7 block.
 #
 # The ONE thing that changes vs the OOC port is the cell prefix: in the block design PulseTableSoc is a
 # user IP, so every cell lives under `riscq_bd_i/top/inst/...`. That prefix ($base) both (a) qualifies
 # the core/datapath filters and (b) GUARDS the datapath confine so it grabs only PulseTableSoc-internal
 # leaf cells — NOT the sibling Zynq PS / RF Data Converter / SmartConnect (which would otherwise match
-# a bare `NAME !~ *_riscvSoc/*`). Needs keepCoreHierarchy=true (GenPulseTableSocVivado sets it) so the
+# a bare `NAME !~ *_riscvSoc/*`). Needs the per-core `KEEP_HIERARCHY` (PulseTableSoc tags it) so the
 # `_riscvSoc/` boundary survives opt_design.
 #
 # Env: RISCQ_ROW (3), RISCQ_PERROW (3), RISCQ_CONFINE (global|region|none, global),
@@ -33,7 +34,7 @@ proc riscq_make_pblock_sites {name cells rect} {
   set pb [create_pblock $name]
   add_cells_to_pblock -quiet $pb $cells
   resize_pblock $pb -add $rect
-  set ramb [get_sites -quiet -of_objects [get_pblocks $pb] -filter {SITE_TYPE =~ RAMB* || SITE_TYPE =~ DSP*}]
+  set ramb [get_sites -quiet -of_objects [get_pblocks $pb] -filter {SITE_TYPE =~ RAMB* || SITE_TYPE =~ DSP* || SITE_TYPE =~ URAM* || SITE_TYPE =~ BLOCKRAM}]
   if {[llength $ramb] > 0} { resize_pblock $pb -remove $ramb }
   set_property IS_SOFT FALSE $pb
   set_property EXCLUDE_PLACEMENT TRUE $pb
@@ -105,7 +106,15 @@ foreach i $ids {
   set rowIdx  [expr {$idx / $perRow}]
   set bandIdx [expr {$idx % $perRow}]
   set rr      [expr {$baseRow + $rowIdx}]
-  set coreCells [get_cells -hierarchical -filter "NAME =~ ${base}/riscqArea_riscqCores_${i}_riscvSoc/*"]
+  # The core's I/D memory is one URAM (RiscvSoc `useUram=true`, the `mem` cell). The X0 clock-region
+  # rows carry NO URAM column, so a URAM cell cannot live in the core's X0 SLICE band. The site-float
+  # trick can't rescue it (it only floats-out a site type the band actually contains), so keep the
+  # `mem` subtree OUT of the band pblock at the MEMBERSHIP level — it then floats to the nearest URAM
+  # column, exactly as the BRAM I/D RAM did before the switch. Without this: Place 30-640 (a URAM cell
+  # trapped in a URAM-less band). `mem` carries KEEP_HIERARCHY, so its name survives opt_design; the
+  # core logic still gets pinned.
+  set core "${base}/riscqArea_riscqCores_${i}_riscvSoc"
+  set coreCells [get_cells -hierarchical -filter "NAME =~ ${core}/* && NAME !~ ${core}/mem && NAME !~ ${core}/mem/*"]
   # the trailing `[` matches the FF cells `coreTime_i_reg[*]` but not the decoder's RegNext copy
   # `coreTime_i_regNext_reg[*]` (which belongs to the confined datapath).
   set tcells [get_cells -quiet -hierarchical -filter "NAME =~ ${base}/*coreTime_${i}_reg\[*"]
@@ -134,4 +143,24 @@ if {[llength $_ccrst] > 0} {
   puts "\[riscvsoc-bd\] waived iLoad-CC buffered-reset recovery arcs ([llength $_ccrst] nets)"
 } else {
   puts "\[riscvsoc-bd\] WARN: no iLoad-CC reset_synchronized nets matched under ${base} — check naming"
+}
+
+# ── fix #2 (optional, RISCQ_MREG_LOCK): freeze the carrierGen ComplexMul product DSPs against phys_opt ──
+# specs/dsp-fmax.md: synthesis packs each recombination product multiply fully pipelined (MREG=1 — the
+# opt_design DRC shows DPOP-4=0), but post-route phys_opt's DSP-register optimization retimes the MREG
+# back out on a placement-dependent subset of the carrier muls (routed DPOP-4 = 4..18, all on
+# .../carrierGen/muls_*/{pim4,pre4}_reg) — an internally-unpipelined 27x18 mult->ALU that can't make
+# 500 MHz. DONT_TOUCH on those DSP48E2 cells, set here at PLACE_DESIGN.TCL.PRE (after opt_design, so
+# MREG is already 1), freezes their internal register configuration through place / route / phys_opt
+# while still allowing the placer to move them. Zero area; scoped to the proven-fragile carrier products
+# only (the envelope / decoder ComplexMuls are never stripped). Gated so it can be A/B'd against a
+# baseline where phys_opt runs unconstrained.
+if {[info exists ::env(RISCQ_MREG_LOCK)] && $::env(RISCQ_MREG_LOCK) ne "0"} {
+  set _pdsp [get_cells -quiet -hierarchical -filter "REF_NAME =~ DSP48E2* && NAME =~ ${base}/*carrierGen/muls_*"]
+  if {[llength $_pdsp] > 0} {
+    set_property DONT_TOUCH true $_pdsp
+    puts "\[riscvsoc-bd\] MREG lock: DONT_TOUCH on [llength $_pdsp] carrierGen ComplexMul DSP48E2 cells"
+  } else {
+    puts "\[riscvsoc-bd\] WARN: RISCQ_MREG_LOCK set but no carrierGen DSP48E2 cells matched under ${base}"
+  }
 }

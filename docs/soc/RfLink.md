@@ -52,7 +52,7 @@ the address falls in `[base, base+size)`, and is **rebased** to that window (the
 is **pure combinational routing — no arbiter, no collision**, because a `Flow` has no back-pressure and the
 far-side channels are independent (each only reacts to addresses in its own window). The per-core fiber
 demuxes the `0x40000` RF window into four `0x10000` sub-windows: gate drive `@0x0`, readout drive
-`@0x10000`, demod LO `@0x20000`, readout decoder `@0x30000`.
+`@0x10000`, demod carrier `@0x20000`, readout decoder `@0x30000`.
 
 ## Latency / timing
 

@@ -19,8 +19,8 @@ demuxes the stream, [PulseParamBuffer](PulseParamBuffer.md) consumes it at the f
 
 It lives next to the core (inside `RiscvSoc`; see [RiscqRfWithPulseTableFiber](RiscqRfWithPulseTableFiber.md)),
 which re-exports the bridge's `cmd` stream so the parent can apply the `linkPipe` stages and route it.
-The RF window is the `0x40000`-byte subtree (gate drive / readout drive / demod / decoder); the bridge's
-`rfAddrWidth` is 18 there.
+The RF window is the `0x40000`-byte subtree (gate drive / readout drive / demod; the fourth quarter is
+reserved — the carrier-triggered decoder has no CPU registers); the bridge's `rfAddrWidth` is 18 there.
 
 ## Why a local ack is correct — the lead-time contract
 

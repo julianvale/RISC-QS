@@ -12,11 +12,13 @@ caller's datapath.
 
 ## Role in the system
 
-Used for the per-core **pulse-envelope memories** in
-[`RiscqRfWithPulseTableFiber`](RiscqRfWithPulseTableFiber.md) (`pulseMemFiber` /
-`readoutMemFiber`): the host loads complex envelope lines over the fabric at `hostCd`, the pulse
-generators read them at `dspCd`. (The CPU instruction/data RAM in [`RiscvSoc`](RiscvSoc.md) uses the
-`Bram`/`Uram` blocks directly rather than through this fiber.)
+Used for the **`robs` readout-trace buffers** in [`PulseTableSoc`](PulseTableSoc.md): the datapath
+writes an ADC trace on pulse fire at `dspCd` (`fastPort`) and the host reads it back over the fabric at
+`hostCd` (`slowPort`) — so the host-readable side genuinely needs the read/write slave. The per-core
+**pulse-envelope memories** the host only *loads* (never reads back) instead use the write-only sibling
+[`BramWriteFiber`](BramWriteFiber.md), which drops the read path and the wide `WidthAdapter`. (The CPU
+instruction/data RAM in [`RiscvSoc`](RiscvSoc.md) uses the `Bram`/`Uram` blocks directly rather than
+through this fiber.)
 
 ```
 hostCd  ── up : Node ──► [ ram(i).slowPort ║ Bram (BramBlackBox.v) ║ ram(i).fastPort ] ──► envelope reader (dspCd)
@@ -56,5 +58,6 @@ mill runMain riscq.memory.sim.BramSim
 
 ## Related
 
+[BramWriteFiber](BramWriteFiber.md) (the write-only sibling) ·
 [DualClockRamFiber](DualClockRamFiber.md) (the `Mem`-inferred sibling) · [Bram](../memory/Bram.md) ·
 [TileLinkMemFiber](TileLinkMemFiber.md) · [RiscqRfWithPulseTableFiber](RiscqRfWithPulseTableFiber.md)

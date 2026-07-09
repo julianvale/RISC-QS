@@ -17,7 +17,7 @@ synthesises **out-of-context as an IP child run** while place+route happen globa
 
 | | `../riscvsoc` (OOC) | `riscvsoc-bd` (this) |
 |---|---|---|
-| RTL | `GenPulseTableSocOoc` — `vivado=false`, plain `dspClk`/`clk` ports | `GenPulseTableSocVivado` — `vivado=true`, `hostClk` + `X_INTERFACE`, `ClockInterface.v` |
+| RTL | `GenPulseTableSocOoc` — `vivado=false`, plain `dspClk`/`clk` ports | `GenPulseTableSocJson <cfg> <dir> vivado` — `vivado=true`, `hostClk` + `X_INTERFACE`, `ClockInterface.v` |
 | context | SoC alone, OOC | SoC IP + Zynq PS + RFDC + SmartConnect in a BD |
 | clocks | `create_clock` on raw ports, async-grouped | board LVDS → `ClockInterface` BUFG → real clock tree |
 | synth | one `synth_design -mode out_of_context -retiming` | BD wrapper `synth_1` + the SoC as an OOC IP child run (retiming pushed onto it via `RISCQ_IP_RETIMING`) |
@@ -67,9 +67,9 @@ Handled by `build-riscvsoc-bd.sh`: `RISCQ_VIVADO_BIN`, `RISCQ_QUBITS` (14), `RIS
 Read by `pblocks-bd.tcl`: `RISCQ_ROW` (3), `RISCQ_PERROW` (3), `RISCQ_CONFINE`
 (`global`|`region`|`none`, default `global`), `RISCQ_BD_BASE` (`riscq_bd_i/top/inst`).
 
-> RTL-level levers (`replicateTime`, `df`, `1h`, `linkPipe`, `keepCoreHierarchy`) are baked into the BD
-> RTL by `GenPulseTableSocVivado` (`keepCoreHierarchy=true` + the `PulseTableSoc` defaults = the
-> floorplan stack), as in the OOC flow.
+> RTL-level levers (`replicateTime`, `df`, `1h`, `linkPipe`, the unconditional `KEEP_HIERARCHY` on each
+> core) are baked into the BD RTL by `GenPulseTableSocJson` (the `PulseTableSoc` defaults = the floorplan
+> stack), as in the OOC flow. The qubit count and DAC/ADC maps come from the JSON config it reads.
 
 ## Caveats
 

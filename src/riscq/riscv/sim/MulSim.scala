@@ -7,7 +7,7 @@ import riscq.riscv.regfile.RegFilePlugin
 import scala.util.Random
 
 /**
- * M-extension multiply testbench — a self-checking **lock-step against a Scala golden model**.
+ * Zmmul multiply testbench — a self-checking **lock-step against a Scala golden model**.
  *
  * A directed program multiplies many operand pairs (random + the signed/unsigned corner cases:
  * 0, ±1, INT_MIN, INT_MAX, all-ones) with all four ops (MUL/MULH/MULHSU/MULHU), then exercises the

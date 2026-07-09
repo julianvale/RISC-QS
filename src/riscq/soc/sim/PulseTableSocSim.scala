@@ -17,8 +17,7 @@ import riscq.soc.PulseTableSoc
  *     proving the host AXI → Tilelink bridge + fabric fan-out + on-chip RAM round-trips;
  *   - a `MasterAgent` on the (test-only) per-core data-bus master schedules a gate pulse through the
  *     SoC's RF decode tree (the writes the control software would issue), and we assert the pulse
- *     propagates through the `dacMap` reduction to the mapped physical DAC and that `robs` captures on
- *     pulse fire;
+ *     propagates through the `dacMap` reduction to the mapped physical DAC;
  *   - the same `MasterAgent` drives the readout path (item (b)): a free-running real ADC tone is fed
  *     into the mapped physical ADC (`io.adc`), the LO carrier is tuned via the demod fiber, and two
  *     integration windows are armed — one with the LO **matched** to the tone, one **detuned**. We
@@ -27,7 +26,7 @@ import riscq.soc.PulseTableSoc
  *     SoC's bulk pipeline latency between `io.adc`/`io.time` and the integrator.
  *
  * (Per-pulse *shape* and the bit-exact readout integral are verified in the per-block sims; this checks
- * the SoC-level wiring — AXI access, channel→DAC mapping, fire-time capture, and the full
+ * the SoC-level wiring — AXI access, channel→DAC mapping, and the full
  * ADC→demod→integrate→read-back path.) Run with `./.metals/mill runMain riscq.soc.sim.PulseTableSocSim`.
  */
 object PulseTableSocSim extends App {
@@ -51,13 +50,13 @@ object PulseTableSocSim extends App {
   def w16(v: BigInt): Int = (((v & 0xFFFF) << 16) & 0xFFFFFFFFL).toInt
   val JAL_SELF = BigInt("6f", 16) // jal x0, 0 — 1-instruction infinite loop (no dBus traffic)
 
-  // Narrow posted-link RF architecture: `startTime` is per-buffer (gate @0x14100, decoder @0x44100) and
+  // Narrow posted-link RF architecture: `startTime` is per-buffer (gate @0x14100, demod @0x34100) and
   // the readout result is read from the core-local ReadoutResultSink (res@0x4200/real@0x4204/imag@0x4208)
   // — the schedule, the dacMap reduction and the VNA readout are otherwise the same writes the control
-  // software issues.
+  // software issues. The readout is carrier-triggered: firing the demod pulse IS the readout (no arm).
   def runSoc(linkPipe: Int): Unit = {
-  val gateStAddr = 0x14100   // gate buffer's per-buffer startTime (RF window @0x10000 + 0x4100)
-  val decStAddr  = 0x44100   // decoder buffer's per-buffer startTime (RF window @0x30000 + 0x4100)
+  val gateStAddr  = 0x14100  // gate buffer's per-buffer startTime (RF window @0x10000 + 0x4100)
+  val demodStAddr = 0x34100  // demod buffer's per-buffer startTime (RF window @0x30000 + 0x4100)
   val resAddr    = 0x4200    // core-local ReadoutResultSink (res@0x4200 / real@0x4204 / imag@0x4208)
   val realAddr   = 0x4204
   val imagAddr   = 0x4208
@@ -87,8 +86,8 @@ object PulseTableSocSim extends App {
     // host bus-load: the program + gate envelope arrive over io.axi → the iMem / pulseMem fabric, exactly
     // as the real SoC loads them — a blackbox `Bram` has no SpinalHDL `Mem` to backdoor-poke. The CPU-mem
     // and pulse-RAM host ports stay live while the cores are held in riscqReset, so this lands before the
-    // reset release below. Each 32-bit lane is one 4-byte AXI write; the WidthAdapter steers it to the
-    // addressed sub-word of the wider pulse-envelope line (as in the Part-1 robs round-trip).
+    // reset release below. Each 32-bit lane is one 4-byte AXI write; the write-only envelope fiber steers
+    // it to the addressed sub-word of the wider pulse-envelope line.
     def leBytes(v: BigInt, n: Int): List[Byte] = List.tabulate(n)(i => ((v >> (8 * i)) & 0xFF).toByte)
     def loadInstr(core: Int, word: Int, v: BigInt): Unit =
       axi.write(BigInt(dut.map.coreMemOffset(core)) + word.toLong * 4, leBytes(v, 4))
@@ -103,9 +102,10 @@ object PulseTableSocSim extends App {
 
     // ── release the cores from reset via the host control block (region 3, riscqReset @ offset 0) ──
     // The drive register is otherwise uninitialized (as in the reference), so the cores boot held in
-    // reset and `time` never advances until the host writes it (time / the riscqCd RF + control fabric
-    // are gated by riscqReset). Assert then deassert for a clean release edge, exactly as the reference
-    // testbench does (0x01 = reset up, 0x00 = reset down).
+    // reset (the CPUs + riscqCd RF/control fabric are gated by riscqReset). `refTime`/`time` free-run in
+    // dspCd, so batch time is already advancing while reset is held — the release just lets the cores act
+    // on it. Assert then deassert for a clean release edge, exactly as the reference testbench does
+    // (0x01 = reset up, 0x00 = reset down).
     val hostCtrlAddr = BigInt(dut.map.hostCtrlBase)
     axi.write(hostCtrlAddr, List(0x01, 0x00, 0x00, 0x00).map(_.toByte)) // riscqReset up (hold cores)
     hostCd.waitSampling(20)
@@ -144,28 +144,25 @@ object PulseTableSocSim extends App {
     wr(0x10000, 0) // fire outId 0
 
     // ── capture the mapped DAC (dacMap (0,0)->8, (0,1)->8 ⇒ DAC 8 sums core-0 gate + readout drive) ──
-    // The gate pulse (channel (0,0)) must reach physical DAC 8 through the dacMap AdderTree reduction,
-    // and `robs` must capture the trace on pulse fire. We track the longest non-zero run of DAC 8 and
-    // whether a fire was seen, sweeping well past the scheduled pulse.
+    // The gate pulse (channel (0,0)) must reach physical DAC 8 through the dacMap AdderTree reduction.
+    // We track the longest non-zero run of DAC 8, sweeping well past the scheduled pulse.
     val dac8      = dut.io.dac(8)
     val gateValid = dut.riscqArea.riscqCores(0).gatePulse.valid
     val stopTime  = startTime + 60
-    var dacNonZeroRun = 0; var maxRun = 0; var sawFire = false; var gateValids = 0; var guard = 0
+    var dacNonZeroRun = 0; var maxRun = 0; var gateValids = 0; var guard = 0
     while (dut.riscqArea.time.toBigInt.toInt < stopTime && guard < 8000) {
       dspCd.waitSampling()
       guard += 1
-      if (dut.riscqArea.fire.toBoolean) sawFire = true
       if (gateValid.toBoolean) gateValids += 1
       if (dac8.payload.toBigInt != 0) { dacNonZeroRun += 1; maxRun = scala.math.max(maxRun, dacNonZeroRun) }
       else dacNonZeroRun = 0
     }
-    println(s"[PulseTableSocSim] gate scheduled@$startTime: gateValids=$gateValids maxDacRun=$maxRun sawFire=$sawFire")
+    println(s"[PulseTableSocSim] gate scheduled@$startTime: gateValids=$gateValids maxDacRun=$maxRun")
 
     assert(gateValids >= dur, s"[M3 gate] gate pulse-generator valid run $gateValids < expected dur $dur")
     assert(maxRun >= dur, s"[M3 DAC] mapped DAC 8 non-zero run $maxRun < expected pulse dur $dur")
-    assert(sawFire, "[M3 robs] no pulse-fire capture observed")
-    println(s"[PulseTableSocSim] PASS: scheduled gate pulse drove DAC 8 (non-zero run $maxRun ≥ dur=$dur) and " +
-      s"robs captured on fire — AXI bridge + dacMap reduction + fire-time capture all functional.")
+    println(s"[PulseTableSocSim] PASS: scheduled gate pulse drove DAC 8 (non-zero run $maxRun ≥ dur=$dur) — " +
+      s"AXI bridge + dacMap reduction functional.")
 
     // ── Part 3: readout — drive a real ADC tone and assert the demod magnitude tracks it (item (b)) ──
     // The full path: io.adc → adcBufs → core 0 ADC → ReadoutDecoder demod (× LO carrier) → integrate →
@@ -192,20 +189,36 @@ object PulseTableSocSim extends App {
     }
     def signed32(u: BigInt): BigInt = { val m = BigInt(1) << 32; val r = ((u % m) + m) % m; if (r >= (BigInt(1) << 31)) r - m else r }
 
-    // tune the LO carrier (readoutDemod @0x30000: freq@+0, phase@+4 — both bitOffset 16), let it settle.
-    wr(0x30000, w16(Fcarrier)); wr(0x30004, w16(0))
-    dspCd.waitSampling(80)
+    // the demod carrier is now a scheduled, envelope-shaped complex pulse (readoutDemod @0x30000 is a
+    // full drive channel: fire@0, freq@4, table[0]@0x10.., startTime@0x4100). Load a SQUARE demod
+    // envelope (constant, ~full-scale real) so the carrier behaves like the old always-on LO within the
+    // window — the host env RAM (demod bank, 32-bit interpolated line: re@[15:0], im@[31:16]).
+    val demodEnvE = 0x7FFF                              // ~unity square envelope (real, im = 0)
+    def loadDemodEnv(core: Int, a: Int, word: BigInt): Unit =
+      axi.write(BigInt(dut.map.demodEnvOffset(core)) + a.toLong * 4, leBytes(word, 4))
+    // prescaleAmp ⇒ the CORDIC runs uncorrected (×K≈1.65); with saturate=false amp must stay well below
+    // full scale so Cordic(amp)·phasor·env doesn't overflow/wrap (matches PulseGeneratorSim's amp≈10000).
+    val demodBase = 0; val demodAmp = 12000
+    for (a <- 0 until 64) loadDemodEnv(0, a, BigInt(demodEnvE))
 
     // free-running ADC stimulus, phase-locked to the SoC batch time (so its frequency exactly matches
     // the LO's); `adcFreq` is switched between windows. Forks are cooperative ⇒ a plain var suffices.
     var adcFreq = Fcarrier
     fork { while (true) { dut.io.adc(adcId).payload #= adcWord(dut.riscqArea.time.toBigInt.toLong, adcFreq); dspCd.waitSampling() } }
 
-    val roDur = 20 // integration window length (batches); window integrates roDur+1 batches × adcN lanes
+    val roDur = 20     // demod window = integration window (batches); integrates roDur batches × adcN lanes
     def runWindow(label: String): Double = {
-      val st = dut.riscqArea.time.toBigInt.toInt + 200 // schedule well ahead of the live batch time
-      wr(decStAddr, st)                                // readout window startTime
-      agent.putInt(src, 0x40000, w16(roDur)); dspCd.waitSampling(2) // arm decoder window (dur@+0)
+      val st = dut.riscqArea.time.toBigInt.toInt + 200 // schedule the demod window well ahead of live time
+      // program + fire the demod carrier pulse (envelope-shaped LO). Firing it IS the readout: the
+      // carrier's valid window triggers the decoder — there is no separate arm. startTime-first order.
+      wr(demodStAddr, st)                              // demod startTime (= integration window start)
+      wr(0x30004, w16(Fcarrier))                       // demod freq
+      wr(0x30010, w16(0)); wr(0x30014, w16(demodAmp))  // table[0]: phase, amp
+      wr(0x30018, w16(demodBase)); wr(0x3001C, w16(roDur)) // table[0]: env base, dur = window
+      wr(0x30000, 0)                                   // fire demod (slot 0) — the readout window
+      // software freshness contract: wait past the window (here past its close) before reading, so the
+      // halting res read returns THIS window's result, not the previous shot's still-held level.
+      waitUntil(dut.riscqArea.time.toBigInt.toInt >= st + roDur + 60)
       agent.getInt(src, resAddr)                       // res — HALTS until the integral settles
       val re = signed32(agent.getInt(src, realAddr))   // real
       val im = signed32(agent.getInt(src, imagAddr))   // imag

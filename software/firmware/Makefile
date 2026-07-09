@@ -3,7 +3,7 @@
 # Our core handles hazards in hardware (standard rv32ui/um ELFs pass under RVLS lock-step), so no
 # NOP-padding toolchain fork is needed — unlike the RISC-Q reference (docs/software/02 §3d).
 # plain = (not ?=) so make's built-in CC=cc doesn't win; still overridable on the command line.
-CC   = /config/build/riscv-install/bin/clang
+CC   = clang
 ARCH = rv32i                         # override `make ARCH=rv32im` when the core is built withMul
 
 CFLAGS  = -target riscv32 -march=$(ARCH) -mabi=ilp32 -mno-relax -nostdlib -static \

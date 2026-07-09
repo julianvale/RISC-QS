@@ -23,26 +23,30 @@ case class SocMemoryMap(
     coreMemBytes: Int,        // bytes of instruction RAM visible per core
     pulseMemBytes: Int,       // bytes of gate-drive pulse-envelope RAM visible per core
     readoutEnvBytes: Int,     // bytes of readout-drive (interpolated) envelope RAM visible per core
+    demodEnvBytes: Int,       // bytes of demod-carrier (interpolated) envelope RAM visible per core
     readoutBufBytes: Int      // bytes of readout buffers visible per core
 ) {
   private def pow2ceil(x: Int): Int = 1 << log2Up(x)
   val coreStride       = pow2ceil(coreMemBytes)
   val pulseStride      = pow2ceil(pulseMemBytes)
   val readoutEnvStride = pow2ceil(readoutEnvBytes)
+  val demodEnvStride   = pow2ceil(demodEnvBytes)
   val readoutStride    = pow2ceil(readoutBufBytes)
 
-  // five equal top-level regions; each holds qubitNum strided sub-windows.
-  val regionSize = pow2ceil(Seq(coreStride, pulseStride, readoutEnvStride, readoutStride).max * qubitNum)
+  // six equal top-level regions; each holds qubitNum strided sub-windows.
+  val regionSize = pow2ceil(Seq(coreStride, pulseStride, readoutEnvStride, demodEnvStride, readoutStride).max * qubitNum)
 
   val coreMemBase    = 0
   val pulseMemBase   = 1 * regionSize
   val readoutEnvBase = 2 * regionSize
-  val readoutBufBase = 3 * regionSize
-  val hostCtrlBase   = 4 * regionSize
+  val demodEnvBase   = 3 * regionSize
+  val readoutBufBase = 4 * regionSize
+  val hostCtrlBase   = 5 * regionSize
 
   def coreMemOffset(core: Int)    = coreMemBase + core * coreStride
   def pulseMemOffset(core: Int)   = pulseMemBase + core * pulseStride
   def readoutEnvOffset(core: Int) = readoutEnvBase + core * readoutEnvStride
+  def demodEnvOffset(core: Int)   = demodEnvBase + core * demodEnvStride
   def readoutBufOffset(core: Int) = readoutBufBase + core * readoutStride
 }
 

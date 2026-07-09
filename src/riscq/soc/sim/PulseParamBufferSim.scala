@@ -114,11 +114,21 @@ object PulseParamBufferSim extends App {
 
     val pulse = master port cloneOf(pg.io.pulse)
     pulse << pg.io.pulse
+
+    val dcOffset = out port SInt(w bits)   // re-export the memory-mapped dcOffset register for checking
+    dcOffset := buf.io.dcOffset
+
+    val phaseOffset = out port SInt(w bits) // re-export the memory-mapped phaseOffset register for checking
+    phaseOffset := buf.io.phaseOffset
   }
 
   def w16(v: BigInt): Int = (((v & 0xFFFF) << 16) & 0xFFFFFFFFL).toInt // 16-bit field in data[31:16]
 
-  SimConfig.compile(Dut()).doSim("pulseParamBuffer", seed = 42) { dut =>
+  SimConfig.compile {
+    val dut = Dut()
+    dut.buf.startTime.simPublic()   // observe the RAW startTime register (io.startTime is now delayed)
+    dut
+  }.doSim("pulseParamBuffer", seed = 42) { dut =>
     val cd = dut.clockDomain
     dut.cmd.valid #= false
     dut.cmd.payload.address #= 0
@@ -149,6 +159,20 @@ object PulseParamBufferSim extends App {
     }
     writePulse(pA)
     writePulse(pB)
+
+    // memory-mapped dcOffset: a posted write to 0x8 (16-bit field at bit 16) lands in the buffer's
+    // dcOffset register, read back on io.dcOffset. The real-lane bias itself is applied downstream in
+    // PulseDriveChannel, so it does not affect this buffer→generator golden path.
+    val dcTest = -1234
+    post(0x8, w16(BigInt(dcTest)))
+    assert(dut.dcOffset.toBigInt == BigInt(dcTest), s"dcOffset ${dut.dcOffset.toBigInt} != $dcTest")
+
+    // memory-mapped phaseOffset: a posted write to 0xC (16-bit field at bit 16) lands in the buffer's
+    // phaseOffset register, read back on io.phaseOffset. The virtual-Z add itself is applied downstream
+    // in PulseDriveChannel, so it does not affect this buffer→generator golden path.
+    val phaseTest = 4321
+    post(0xC, w16(BigInt(phaseTest)))
+    assert(dut.phaseOffset.toBigInt == BigInt(phaseTest), s"phaseOffset ${dut.phaseOffset.toBigInt} != $phaseTest")
 
     // ── ramp timeBcast and capture the pulse per cycle ──
     val capV  = Array.ofDim[Boolean](totalCycles)
@@ -187,8 +211,89 @@ object PulseParamBufferSim extends App {
     for (c <- 0 until totalCycles if !capV(c); k <- 0 until N)
       assert(capRe(c)(k) == 0 && capIm(c)(k) == 0, s"non-zero payload at idle cycle $c lane $k")
 
+    // ── spec 09 B0: startTime auto-advance on fire (checked on the RAW startTime register) ──
+    // The table still holds pA (idx0, dur=pA.dur) and pB (idx1, dur=pB.dur) from writePulse above.
+    def readStart(): BigInt = dut.buf.startTime.toBigInt
+    // tight variant: drive cmd.valid on ADJACENT cycles — post() leaves a 2-cycle gap, too wide for
+    // the back-to-back fire cases (adjacent play() calls really do put beats on consecutive cycles).
+    def postTight(beats: Seq[(Int, Int)]): Unit = {
+      for ((addr, data) <- beats) {
+        dut.cmd.valid #= true
+        dut.cmd.payload.address #= addr
+        dut.cmd.payload.data #= data & 0xFFFFFFFFL
+        cd.waitSampling()
+      }
+      dut.cmd.valid #= false
+      cd.waitSampling(3)   // let the last fire's beat-after increment settle onto the register
+    }
+
+    // 1) set_start(t) + fire(idx): the register advances by exactly the fired entry's dur.
+    val t1 = 1000
+    post(startTimeAddr, t1)
+    post(0x0, pA.idx)
+    cd.waitSampling(2)
+    assert(readStart() == t1 + pA.dur, s"[B0 advance] startTime ${readStart()} != ${t1 + pA.dur}")
+
+    // 2) two fires on ADJACENT beats accumulate dur_a + dur_b (running sum).
+    val t2 = 2000
+    post(startTimeAddr, t2)
+    postTight(Seq((0x0, pA.idx), (0x0, pB.idx)))
+    assert(readStart() == t2 + pA.dur + pB.dur,
+      s"[B0 accumulate] startTime ${readStart()} != ${t2 + pA.dur + pB.dur}")
+
+    // 3) an explicit startTime write on the beat right after a fire WINS (beat-order priority): the
+    //    fire's would-be increment (t3 + dur_a) is discarded in favour of the written value.
+    val t3 = 3000; val t3b = 7777
+    post(startTimeAddr, t3)
+    postTight(Seq((0x0, pA.idx), (startTimeAddr, t3b)))
+    assert(readStart() == t3b, s"[B0 priority] startTime ${readStart()} != $t3b (explicit write must win)")
+
     println(s"[PulseParamBufferSim] PASS  pulseNum=$pulseNum N=$N w=$w useMem=$useMem: 2 posted-RfCmd-driven pulses bit-exact " +
       s"vs the PulseGenerator golden; valid window exactly [startTime+$offA, +dur); uniform bulk latency $offA.")
+    simSuccess()
+  }
+
+  // ── spec 09 B0: pulseNum = 1 (depth-1 table ⇒ FF register file, no addressable index) advances
+  //    startTime identically. Buffer-only DUT — the register semantics don't need a PulseGenerator. ──
+  case class Dut1() extends Component {
+    val cmd       = slave port Flow(RfCmd(addrWidth))
+    val timeBcast = in    port UInt(timeWidth bits)
+    val buf = PulseParamBuffer(PulseParamBufferParams(
+      pulseNum = 1, dataWidth = w, envAddrWidth = envAddrW, durWidth = durWidth,
+      timeWidth = timeWidth, addrWidth = addrWidth, useMem = false))
+    buf.io.cmd << cmd
+    buf.io.timeBcast := timeBcast
+  }
+
+  SimConfig.compile {
+    val dut = Dut1()
+    dut.buf.startTime.simPublic()
+    dut
+  }.doSim("pulseParamBuffer_p1", seed = 7) { dut =>
+    val cd = dut.clockDomain
+    dut.cmd.valid #= false
+    dut.cmd.payload.address #= 0
+    dut.cmd.payload.data #= 0
+    dut.timeBcast #= 0
+    cd.forkStimulus(10)
+    cd.waitSampling(20)
+    def post(addr: Int, data: Int): Unit = {
+      dut.cmd.valid #= true
+      dut.cmd.payload.address #= addr
+      dut.cmd.payload.data #= data & 0xFFFFFFFFL
+      cd.waitSampling()
+      dut.cmd.valid #= false
+      cd.waitSampling(2)
+    }
+    val dur0 = 9
+    post(0x10 + 12, w16(BigInt(dur0)))   // table[0].dur (entry 0 sits at (0+1)*0x10, dur at +12)
+    val t = 500
+    post(0x4100, t)                       // set_start
+    post(0x0, 0)                          // fire idx 0
+    cd.waitSampling(2)
+    assert(dut.buf.startTime.toBigInt == t + dur0,
+      s"[B0 pulseNum=1] startTime ${dut.buf.startTime.toBigInt} != ${t + dur0}")
+    println(s"[PulseParamBufferSim] PASS  pulseNum=1: set_start($t)+fire(0) advances startTime to ${t + dur0} (= t + dur).")
     simSuccess()
   }
 }

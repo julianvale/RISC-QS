@@ -12,7 +12,7 @@ converters. It is the up-direction counterpart to the down-link ([RfLinkBridge](
 ## Role in the system
 
 ```
-  ReadoutDecoder ──res.valid edge──▶ source() ── Flow(ReadoutResult) ── linkPipe ──▶ ReadoutResultSink ──▶ CPU
+  ReadoutDecoder ──res.valid level──▶ source() ── Flow(ReadoutResult) ── linkPipe ──▶ ReadoutResultSink ──▶ CPU
         (DSP region)                                  posted, up, no ack            (core region, local halt)
 ```
 
@@ -34,23 +34,26 @@ is identical, but the halt is a short local arc. Only this one bundle ever trave
 
 ### `ReadoutResultLink.source(...)` (DSP side)
 
-Emits **one** posted beat on the **rising edge** of the decoder's `res.valid`. The edge — not the level —
-matters: `resValid` stays high until the next window arm, so forwarding it raw would re-set the sink *after*
-a local arm-clear and resurrect a stale result. The single-beat-on-edge keeps exactly one fresh datum on
-the link per completed window.
+Forwards the decoder's `res.valid` **as a level** (not an edge) with the current `res`/`real`/`imag`. The
+carrier-triggered decoder already shapes that level exactly right — high from a window's settle until the
+next window's `winStart` clears it, i.e. **low exactly while a fresh window integrates** — so the sink can
+mirror it directly, with no edge-detect and no stale-beat bookkeeping.
 
 ### `ReadoutResultSink(...)` (core side)
 
-Latches `{res, real, imag}` when a beat arrives and exposes a `valid` flag. Its `mapping(factory)`
-contributes the readout decoder's read map to a core-local [MemMapFiber](MemMapFiber.md): `res`@4 (HALTS
-the read locally until `valid`), `real`@8, `imag`@12. Two invariants make it correct:
+**Mirrors** the decoder's `res.valid` level (through the link) into its own `valid` and latches
+`{res, real, imag}` while that level is high. Its `mapping(factory)` contributes the readout result's read
+map to a core-local [MemMapFiber](MemMapFiber.md): `res`@4 (HALTS the read locally until `valid`), `real`@8,
+`imag`@12. There is **no arm and no consume** — a `res` read does not clear `valid`, so it is **idempotent**
+(see [specs/new-readout-decoder](../../specs/new-readout-decoder/README.md) §2.4):
 
-- **Freshness.** `valid` is **cleared on window-arm** (`arm`, pulsed on the CPU's local `dur`-write to the
-  decoder), so a stale result from the previous window can never be read. The arm-clear and the up-beat are
-  sequenced by the single-pending-readout software contract: the CPU arms a window, then reads `res`
-  (halting) before arming the next.
-- **Same-cycle race.** When a beat and an `arm` land the same cycle, the **fresh beat wins** (it is the
-  newer datum) — the `when(resultIn.valid)` write follows the `when(arm)` clear.
+- **Halt.** Because the mirrored level is low exactly while a fresh window integrates, a `res` read that
+  races a new window halts until it settles — the same local-halt contract as before, now with no arm.
+- **Freshness is a software timing contract**, not a hardware clear. The level holds the *previous*
+  window's result high through the `LEAD` gap between a `play` and the window opening, so software waits
+  past the window's opening (`wait_until(now ≥ startTime + RQ_RO_LEAD)`) before reading — past `winStart`
+  the stale level has dropped, so the halting read can only return the new window. `real`/`imag` are
+  non-consuming latches read after `res`.
 
 ## Latency / timing
 
@@ -65,12 +68,13 @@ decoder's accumulator width; the three offsets keep the CPU-visible map referenc
 ## Verification
 
 `riscq.soc.sim.ReadoutResultLinkSim` runs a real [ReadoutDecoder](../dsp/ReadoutDecoder.md) integrating a
-tone over two scheduled windows; the result is posted up through `source`, pipelined, and latched by the
-sink. The CPU (a `MasterAgent`) reads `res`/`real`/`imag` from the sink's **local** map — the `res` read
-halts locally until the integral settles — and the values are checked **bit-exact** vs the windowed-demod
-golden. The `dur`-arm is posted down (also pipelined) while the sink's `valid` is cleared locally on the
-same arm, proving freshness (window B's arm clears window A's just-read result). Swept over
-`linkPipe ∈ {0, 4, 16}` to show distance-tolerance.
+tone over two carrier-`Flow` windows; `res.valid` is forwarded up as a level through `source`, pipelined,
+and mirrored by the sink. The CPU (a `MasterAgent`) reads `res`/`real`/`imag` from the sink's **local** map
+— the `res` read halts locally until the integral settles — and the values are checked **bit-exact** vs the
+windowed-demod golden. The freshness contract is proven directly: a `res` read issued before the first
+window settles halts and returns A; re-reading with no new window returns A again (**idempotent**); the
+mirrored `valid` drops while window B integrates and rises on its settle; a read after waiting past B's
+opening returns B (not the stale A). Swept over `linkPipe ∈ {0, 4, 16}` to show distance-tolerance.
 
 ```bash
 mill runMain riscq.soc.sim.ReadoutResultLinkSim

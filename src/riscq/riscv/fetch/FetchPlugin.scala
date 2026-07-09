@@ -56,6 +56,12 @@ class FetchPlugin(p: RiscqParam) extends FiberPlugin {
       val reserveId = Counter(idCount)                    // id handed to the next fork
       val inflight  = Vec.fill(idCount)(RegInit(False))   // a Get is outstanding on this id
       val words     = Vec.fill(idCount)(Reg(Bits(32 bits)))
+      // E4 (baked in): cap the fanout of the halt-driving buffer control so Vivado replicates
+      // reserveId/inflight per fetch-front consumer instead of routing one net into every stage's CE.
+      // The fork halt `full = inflight(reserveId)` and the join halt `!inflight(id)` feed the fetch
+      // `ready` spine → the pcReg/fetch-front clock-enables (~65 % route). Bit-exact (attribute only).
+      reserveId.value.addAttribute("MAX_FANOUT", 16)
+      inflight.foreach(_.addAttribute("MAX_FANOUT", 16))
     }
     iBus.d.ready := True
     when(iBus.d.fire) {                                   // latch the returning word against its id

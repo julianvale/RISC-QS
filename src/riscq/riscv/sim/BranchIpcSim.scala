@@ -38,6 +38,10 @@ object BranchIpcSim extends App {
   // (0 → 1 bubble).
   val btbPredictLate = sys.env.get("RISCQ_BTB_LATE")
     .map(s => s == "1" || s.equalsIgnoreCase("true")).getOrElse(RiscqParam().btbPredictLate)
+  // RISCQ_LATE_BADTARGET=1 prices the jumpAt-side target compare (expected 0%: the decision still
+  // acts at jumpAt in the same cycle — cycle-identical by design).
+  val lateBadTarget = sys.env.get("RISCQ_LATE_BADTARGET")
+    .map(s => s == "1" || s.equalsIgnoreCase("true")).getOrElse(RiscqParam().lateBadTarget)
   // RISCQ_SKID_AFTER=1,3 sets the skid-buffer boundaries (transparent ⇒ IPC-neutral; here to confirm it).
   val skidAfter = sys.env.get("RISCQ_SKID_AFTER")
     .map(_.split(",").map(_.trim).filter(_.nonEmpty).map(_.toInt).toSeq).getOrElse(RiscqParam().skidAfter)
@@ -45,8 +49,8 @@ object BranchIpcSim extends App {
   // in-region discriminating power). The 4KB region (memWords 1<<10) fits N=12.
   val fetchPcWidth = sys.env.get("RISCQ_FETCH_PC_WIDTH").map(_.toInt).orElse(RiscqParam().fetchPcWidth)
   val param = RiscqParam(memWords = 1 << 10, gshareMem = gshareMem,
-    aluFastAddOnly = aluFastAddOnly, btbPredictLate = btbPredictLate,
-    skidAfter = skidAfter, fetchPcWidth = fetchPcWidth)
+    aluFastAddOnly = aluFastAddOnly, btbPredictLate = btbPredictLate, lateBadTarget = lateBadTarget,
+    skidAfterOverride = Some(skidAfter), fetchPcWidth = fetchPcWidth)
   val base  = param.resetVector.toLong
   val L     = 1 // fixed instruction-memory latency (hidden by the multi-outstanding fetch)
 
@@ -185,11 +189,31 @@ object BranchIpcSim extends App {
   assert(full2.mispredicts * 2 < btb2.mispredicts,
     f"bias: GShare ${full2.mispredicts} not a clear win over always-taken ${btb2.mispredicts}")
 
+  // ============ Scenario 3 (E2, baked in): a poison load in a mispredict shadow is safe ============
+  // idx3 LW is the JAL@2 fall-through: on the JAL's cold BTB miss it is fetched wrong-path and, one
+  // stage behind the JAL, sits at executeAt exactly when the JAL resolves at jumpAt (cancelled). E2 (now
+  // baked) keeps the cancel out of the LSU halt qualifier: the LSU halts that one cancelled cycle, but
+  // the flush clears the stage off the ready spine at the next edge, so it never issues a cmd, never
+  // commits, and — crucially — never deadlocks (a wrong regression here would hang the run). The load is
+  // always wrong-path (poison, JAL skips it once the BTB learns), so the idle data bus suffices. The
+  // zero-IPC property was gated off-vs-on before E2 was baked (git history / riscv-fmax.md §5 E2).
+  def LW(rd: Int, rs1: Int, imm: Int) = i(imm, rs1, 0x2, rd, 0x03)
+  val shadowImage = buildImage(Seq(
+    /*0*/ ADDI(1, 0, loopN), /*1*/ ADDI(1, 1, -1),
+    /*2*/ JAL(0, 8),         /*3*/ LW(9, 0, 0),     // idx3 poison LOAD (JAL jumps to idx4)
+    /*4*/ BNE(1, 0, -12),    /*5*/ ECALL
+  ))
+  val shadow = run(shadowImage, param.plugins(), "shadow")
+  assert(shadow.regs(9) == 0, s"shadow: poison load committed (x9=${shadow.regs(9)})")
+  assert(shadow.mispredicts > 0, "shadow: expected a JAL cold-miss mispredict (the load's shadow)")
+
   println(
     f"[BranchIpcSim] PASS%n" +
       f"  loop (BTB vs none):     ${full1.commits} commits; ${full1.cycles} cyc IPC $ipcFull%.3f " +
       f"vs ${base1.cycles} cyc IPC $ipcBase%.3f (${base1.cycles - full1.cycles} fewer, ${ipcFull / ipcBase}%.2fx)%n" +
       f"  bias (GShare vs always-taken): ${full2.mispredicts} vs ${btb2.mispredicts} branch mispredicts " +
-      f"over ${full2.commits} commits ($notTaken/$biasN fall-throughs); identical commit streams."
+      f"over ${full2.commits} commits ($notTaken/$biasN fall-throughs); identical commit streams.%n" +
+      f"  shadow (E2, baked): poison load in a mispredict shadow never commits, no deadlock " +
+      f"(${shadow.mispredicts} mispred, ${shadow.cycles} cyc)."
   )
 }

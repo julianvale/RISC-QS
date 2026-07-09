@@ -34,19 +34,32 @@ schedule within `±2^(timeWidth−1)` of now, so the time counter wrapping `2^ti
 `TimedEntry`, `TimedQueueIo`, and the `TimedQueueLike` trait are shared by all implementations, so one
 testbench body drives any of them.
 
-## The three implementations and why they exist
+## The implementations and why they exist
 
-The active toplevel uses the RISC-Q-style `TimedQueue`; the two variants in
-`TimedQueueVariants.scala` are kept for swap-in. All share the same `io` and the same external
-contract, so any one drops into the toplevel by renaming.
+`TimedQueue` itself carries an **`impl` selector** (`TimedQueueImpl`, default `RegHead`) choosing
+one of four microarchitectures behind the same io/contract; the `PulseGenerator`/
+`PulseGeneratorAligned` params expose it as `queueImpl`. Two further II=1 variants live in
+`TimedQueueVariants.scala` for swap-in by renaming.
 
 | Implementation | II | latency | storage | the trade |
 |---|---|---|---|---|
-| `TimedQueue` (active) | ≥ 2 | 0 | `StreamFifo` | registered compare — leanest LUT, but no back-to-back |
+| `impl = RegHead` (default) | 2 | 0 | `StreamFifo` (LUTRAM) | registered compare + m2sPipe head — the deployed queue |
+| `impl = Srl` | 2 | 0 | `SrlFifo` (SRL) | RegHead's FSM, deadline precomputed at push; no FIFO pointers ⇒ the tiny (CLB-fragmenting) control sets vanish |
+| `impl = Shadow` | 3 | 0 | `StreamFifo` (LUTRAM) | CE-free shadow register of the head's deadline instead of the m2sPipe stage: −12 FF, −1 control set per queue |
+| `impl = SrlShadow` | 3 | 0 | `SrlFifo` (SRL) | the congestion-leanest compose: −2.5 control sets and −15 FF per queue vs RegHead, +18 LUT |
 | `TimedQueueRegArray` | 1 | 0 | register array | per-slot registered due bit |
 | `TimedQueueDeadline` | 1 | 0 | `StreamFifo` | precomputed deadline, combinational compare |
 
-**`TimedQueue` (active).** A `StreamFifo` of `{data, startTime}` whose wrap-safe due test is
+All four `impl` options keep the registered due test (the compare starts at a flip-flop), the lean
+2-FF `pop.valid`, and the same `lead + 3` exact-pop push margin; they differ in replication
+congestion cost and back-to-back drain rate (II — irrelevant for the well-spaced schedules the
+software LEAD contract guarantees; malformed schedules still drain, one entry per II cycles). The
+per-queue numbers come from a 48-queue post-route comparison bench (xczu49dr, depth 4); at
+depth 32 the LUTRAM is depth-free (RAM32 primitives), so the `Srl*` LUT premium grows (~+50 %)
+while their control-set/FF wins persist. The II=1 variants price poorly post-route (combinational
+due / per-slot compares) and exist for schedules that genuinely need back-to-back drain.
+
+**`RegHead` (default).** A `StreamFifo` of `{data, startTime}` whose wrap-safe due test is
 **registered** and then edge-detected to fire once:
 
 ```
@@ -64,6 +77,27 @@ II=1**: the `blank` cycle that makes the edge-detect fire once also means severa
 drain one every two cycles. This never binds in practice — the pulse generator spaces each parameter's
 updates far apart; II=1 only matters for malformed/overlapping schedules. When it *is* needed, swap in
 a variant.
+
+**`Srl`.** RegHead's exact pop FSM over an `SrlFifo` — a shift array (slot 0 takes each push, the
+oldest entry sits at the dynamic tap `slots(count − 1)`) whose slots carry no reset and share one
+write enable, the Xilinx dynamic-SRL idiom (SRL16E/SRLC32E, `depth ≤ 32`). Storage then costs no
+flip-flops and there are **no FIFO pointers**, only a CE-free occupancy count — the per-queue
+pointer clock-enables, the tiny control sets that fragment CLB packing when the queue is
+replicated per channel, vanish. The FIFO payload is `{data, deadline}` with
+`deadline = startTime − (lead + offset + 1)` folded in at push, so the per-cycle due test is a
+single 2-operand subtract. The SRL tap read (A→Q) into the head stage is the one
+placement-sensitive path at very high clocks.
+
+**`Shadow`.** Drops the m2sPipe head stage: a **CE-free, reset-free shadow register** tracks the
+FIFO head's precomputed deadline one cycle behind (`shadowDl := RegNext(head.deadline)`,
+unconditional — no control set), and the registered due compare reads the shadow, so the
+`ptr → LUTRAM → compare` cone is still cut at a register at a fraction of the m2sPipe's area. The
+FIFO head is consumed at pop (pop data reads the LUTRAM directly), and after a pop the shadow is
+stale one extra cycle — the fire-once blank stretches to **two** cycles, hence II=3.
+
+**`SrlShadow`.** `Shadow`'s FSM over `SrlFifo` storage — the congestion-leanest compose: every
+flip-flop in the queue is either CE-free (shadow, compare, blanks, count) or reset-free (the SRL
+slots), so the queue contributes no unique control set beyond the module-shared reset.
 
 **`TimedQueueRegArray`.** A register buffer that stores each slot's data, precomputed
 `deadline = startTime − lead`, and a **registered due bit** maintained *every cycle for every slot* via
@@ -92,20 +126,53 @@ The default `useVec = false, forFMax = false` is the **congestion-best** config.
 `withAsyncRead = true` so the head is combinationally available for the registered due test, keeping
 external latency at 0.
 
+## In-SoC timing levers (specs/dsp-fmax.md B3 / C1)
+
+The **B3 lean pop is baked in** — `pop.valid := timeUp && !blank`, with the `head.valid` term dropped.
+The term is redundant: `timeUp` already embeds `head.valid` from the previous cycle, `head.valid` can
+only fall via a pop (there is no flush), and `blank` masks exactly that cycle. `pop.valid` is thus a
+2-FF product, taking the FIFO pointer-compare (occupancy) off every consumer clock-enable — the in-SoC
+`pop.valid → cnt/CE` broadcast family. It is **bit-exact at the pop `Flow`** (see Verification below).
+
+One remaining flag, also bit-exact at the pop `Flow` (**default on** since the RF-queue-flush
+removal), a **TimedQueue-level option** applying to `impl = RegHead` only:
+
+- `regHead` (C1) — an `m2sPipe` head stage between the async-read FIFO and the due test, so the
+  32-bit compare reads `startTime` from a **register** instead of pointer→LUTRAM (the one real
+  6-level cone in the 14q SoC → ~3 levels). The stage refills combinationally from the async read
+  in the same cycle it is popped, so back-to-back drain **stays one entry per 2 cycles**; the one
+  real cost is +1 cycle push→head visibility — an entry must be pushed ≥ `leadTime + 3` (was `+ 2`)
+  cycles before its `startTime` to pop at exactly `startTime − leadTime`, inside the software LEAD
+  contract's margin. It also adds one slot of effective capacity (`depth + 1`).
+
 ## Usage
 
 ```bash
-mill runMain riscq.dsp.pulse.sim.TimedQueueSim          # active RISC-Q-style queue
+mill runMain riscq.dsp.pulse.sim.TimedQueueSim          # the default RegHead impl (both regHead values)
+mill runMain riscq.dsp.pulse.sim.TimedQueueImplSim      # the Srl / Shadow / SrlShadow impls (RISCQ_TQ_DEPTH=32 for deep queues)
 mill runMain riscq.dsp.pulse.sim.TimedQueueVariantsSim  # the II=1 variants
 ```
+
+`PulseGeneratorSim` takes `RISCQ_QUEUE_IMPL=Srl|Shadow|SrlShadow` to run the end-to-end
+exact-window golden over a non-default impl (all pass bit-exact).
 
 ## Verification
 
 `riscq.dsp.pulse.sim.TimedQueueSim` runs a **cycle-accurate mirror** of the hardware FSM in lock-step
-— it models the registered compare and the fire-once `blank` exactly and asserts `pop` equal every
-cycle — over scenarios: clean well-spaced timing, past-due (drains II=2), full-queue backpressure,
-time wrap-around, a calibration `timeOffset`, and a long randomized near-future schedule, checking the
-precise pop cycle, the wrap-safe geq, and in-order completeness.
+— it models the registered compare, the fire-once `blank`, and (under `regHead`) the m2sPipe head
+stage exactly, and asserts `pop` equal every cycle — over scenarios: clean well-spaced timing,
+past-due (drains II=2), full-queue backpressure + drain/refill, time wrap-around, a calibration
+`timeOffset`, the tightest exact-pop push margin (`lead + 3`), push-when-due, and a long randomized
+near-future schedule, checking the precise pop cycle, the wrap-safe geq, and in-order completeness.
+Every scenario runs over **both `regHead` values**, and the model always evaluates the *original* pop
+expression `head.valid && timeUp && !blank` — the baked-in lean DUT matching it every cycle is the
+standing bit-exactness proof for dropping the `head.valid` term.
+
+`riscq.dsp.pulse.sim.TimedQueueImplSim` gives the `Srl` / `Shadow` / `SrlShadow` impls the same
+treatment — a cycle-accurate mirror per FSM (Srl reuses the regHead mirror; Shadow/SrlShadow get
+the shadow/2-cycle-blank mirror), always evaluating the ORIGINAL pop expression against the DUT's
+lean form, over the same scenario set (incl. an overfill/backpressure corner that adapts to
+`RISCQ_TQ_DEPTH`, and the `lead + 3` tight-margin exact-pop bound shared by every impl).
 
 `riscq.dsp.pulse.sim.TimedQueueVariantsSim` drives both variants through one body against a
 *combinational* due model (`pop == (time + lead ≥ startTime)` for the head every cycle), confirming

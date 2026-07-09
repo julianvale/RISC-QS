@@ -77,7 +77,7 @@ case class PulseGeneratorAligned(p: PulseGeneratorParams) extends Component {
   // ── one combined TimedQueue for {amp, phase, addr, dur}, popped at the LATEST of their leads ──
   val maxLead = Seq(leadAmp, leadPhase, leadAddr, leadDur).max
   val paramQ = TimedQueue(AlignedPulseParams(w, p.addrWidth, p.durWidth), p.timeWidth, p.queueDepth,
-    maxLead, p.timeOffset, p.queueUseVec, p.queueForFMax)
+    maxLead, p.timeOffset, p.queueUseVec, p.queueForFMax, impl = p.queueImpl)
   paramQ.io.time := io.time
   paramQ.io.push.valid             := io.params.valid
   paramQ.io.push.payload.data      := io.params.payload
@@ -85,7 +85,8 @@ case class PulseGeneratorAligned(p: PulseGeneratorParams) extends Component {
 
   // ── frequency: own separate queues (left as a separate signal, QubiC-style) ──
   def mkFreqQueue(lead: Int): TimedQueue[SInt] = {
-    val q = TimedQueue(SInt(w bits), p.timeWidth, p.queueDepth, lead, p.timeOffset, p.queueUseVec, p.queueForFMax)
+    val q = TimedQueue(SInt(w bits), p.timeWidth, p.queueDepth, lead, p.timeOffset, p.queueUseVec, p.queueForFMax,
+      impl = p.queueImpl)
     q.io.time := io.time
     q.io.push.valid             := io.freq.valid
     q.io.push.payload.data      := io.freq.payload

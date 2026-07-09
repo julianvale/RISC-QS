@@ -61,7 +61,6 @@ case class FarmRegion(
       coreTime := coreTime + 1
       coreTime.addAttribute("DONT_TOUCH")
       riscvSoc.time     := coreTime
-      riscvSoc.fromHost := 0
 
       if (includeDummies) {
         // ── dummy anchor folded INTO the region (cloned/locked along with the cores) ──

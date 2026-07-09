@@ -34,24 +34,40 @@ object VivadoBench {
   /**
    * The `RiscqParam` to benchmark. Defaults to `RiscqParam()`, with env-variable A/B overrides:
    *   - `RISCQ_SKID_AFTER` — skid-buffer placement: comma-separated boundary indices,
-   *     e.g. `=2` (decode->execute), `=1` (fetch->decode, the default), or `=` (none).
+   *     e.g. `=2` (decode->execute), or `=` (none). Default: `Seq(fetchLatency)`.
    *   - `RISCQ_GSHARE_MEM` — `=1`/`=0` toggles `gshareMem` (GShare counters in a `Mem`).
    *   - `RISCQ_CSR_WARL`   — `=1`/`=0` toggles `csrWarl` (CSR WARL/WLRL trimming).
-   * Shared with [[VivadoRouteBench]] and [[VivadoABCheck]].
+   *   - `RISCQ_ALU_NO_FASTFWD` / `RISCQ_ALU_ONEHOT` — the landed df/1h ALU levers.
+   *   - `RISCQ_CSRCE_MAXFANOUT` — the fanout cap on the CSR commit qualifier (0 = off, the default).
+   *     (The structural levers B3/B4/E1–E3 and the jumpAt (B2) / fetch (E4) MAX_FANOUT=16 caps are
+   *     baked in — no longer toggle-able.)
+   *   - `RISCQ_FETCH_LATENCY` / `RISCQ_FETCH_PC_WIDTH` — the SoC fetch geometry
+   *     (`PulseTableSoc` runs `fetchLatency=4, fetchPcWidth=14`; the core default is 1/full).
+   * Shared with [[VivadoRouteBench]], [[VivadoABCheck]] and [[ControlSetBench]] — so any of them
+   * can bench the exact SoC core config from the environment alone.
    */
   def benchParam(): RiscqParam = {
     val skid = sys.env.get("RISCQ_SKID_AFTER")
-      .map(_.split(",").map(_.trim).filter(_.nonEmpty).map(_.toInt).toSeq)
-      .getOrElse(RiscqParam().skidAfter)
+      .map(s => Some(s.split(",").map(_.trim).filter(_.nonEmpty).map(_.toInt).toSeq))
+      .getOrElse(RiscqParam().skidAfterOverride)
     RiscqParam(
-      skidAfter = skid,
+      skidAfterOverride = skid,
       withMul = flag("RISCQ_WITH_MUL", RiscqParam().withMul),
       gshareMem = flag("RISCQ_GSHARE_MEM", RiscqParam().gshareMem),
       csrWarl = flag("RISCQ_CSR_WARL", RiscqParam().csrWarl),
       aluOperandMaxFanout =
         sys.env.get("RISCQ_ALU_MAXFANOUT").map(_.toInt).getOrElse(RiscqParam().aluOperandMaxFanout),
+      csrCommitMaxFanout =
+        sys.env.get("RISCQ_CSRCE_MAXFANOUT").map(_.toInt).getOrElse(RiscqParam().csrCommitMaxFanout),
+      // C3 latency-for-margin flags: late BTB re-steer / late BAD_TARGET compare (both default off).
+      btbPredictLate = flag("RISCQ_BTB_LATE", RiscqParam().btbPredictLate),
+      lateBadTarget = flag("RISCQ_LATE_BADTARGET", RiscqParam().lateBadTarget),
       aluFastAddOnly = flag("RISCQ_ALU_FAST_ADDONLY", RiscqParam().aluFastAddOnly),
-      deriveImmFromWord = flag("RISCQ_DERIVE_IMM", RiscqParam().deriveImmFromWord)
+      aluNoFastForward = flag("RISCQ_ALU_NO_FASTFWD", RiscqParam().aluNoFastForward),
+      aluResultOneHot = flag("RISCQ_ALU_ONEHOT", RiscqParam().aluResultOneHot),
+      deriveImmFromWord = flag("RISCQ_DERIVE_IMM", RiscqParam().deriveImmFromWord),
+      fetchLatency = sys.env.get("RISCQ_FETCH_LATENCY").map(_.toInt).getOrElse(RiscqParam().fetchLatency),
+      fetchPcWidth = sys.env.get("RISCQ_FETCH_PC_WIDTH").map(_.toInt).map(Some(_)).getOrElse(RiscqParam().fetchPcWidth)
     )
   }
 

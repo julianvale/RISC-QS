@@ -1,5 +1,5 @@
 # ---- Synthesis (+ optional implementation / bitstream), gated by the config run flags --------------
-
+set_param general.maxThreads 2
 if {$RUN_SYNTH} {
   set_property strategy Flow_PerfOptimized_high [get_runs synth_1]
   set_property STEPS.SYNTH_DESIGN.ARGS.GLOBAL_RETIMING on [get_runs synth_1]
@@ -38,7 +38,7 @@ if {$RUN_SYNTH} {
       }
     }
   }
-  launch_runs synth_1 -jobs 8
+  launch_runs synth_1 -jobs 1
   wait_on_run synth_1
   if {[get_property PROGRESS [get_runs synth_1]] != "100%"} {
     error "synthesis failed — see $BUILD_DIR/$PRJ.runs/synth_1"
@@ -74,9 +74,9 @@ if {$RUN_IMPL} {
     puts "\[run\] pblock floorplan: $_ppre (RISCQ_PBLOCK=$::env(RISCQ_PBLOCK))"
   }
   if {$RUN_BITSTREAM} {
-    launch_runs impl_1 -to_step write_bitstream -jobs 8
+    launch_runs impl_1 -to_step write_bitstream -jobs 1
   } else {
-    launch_runs impl_1 -jobs 8
+    launch_runs impl_1 -jobs 1
   }
   wait_on_run impl_1
   if {[get_property PROGRESS [get_runs impl_1]] != "100%"} {
@@ -85,9 +85,18 @@ if {$RUN_IMPL} {
   open_run impl_1
   report_utilization    -file $BUILD_DIR/util_impl.rpt
   report_timing_summary -file $BUILD_DIR/timing_impl.rpt -max_paths 20
-  puts "\[run\] implementation OK — reports in $BUILD_DIR (util_impl.rpt / timing_impl.rpt)"
+  # per-cone failing-endpoint classifier (specs/riscv-fmax.md A1) → cones_impl.rpt / cones_paths.tsv
+  if {[catch {
+    set CONES_DIR $BUILD_DIR
+    source $SCRIPT_DIR/../report-cones.tcl
+  } _ce]} { puts "\[run\] WARN: report-cones failed: $_ce" }
+  puts "\[run\] implementation OK — reports in $BUILD_DIR (util_impl.rpt / timing_impl.rpt / cones_impl.rpt)"
   if {$RUN_BITSTREAM} {
     file copy -force $BUILD_DIR/$PRJ.runs/impl_1/${BD_NAME}_wrapper.bit $BUILD_DIR/$TOP_MODULE.bit
     puts "\[run\] bitstream -> $BUILD_DIR/$TOP_MODULE.bit"
+    # Hardware handoff for the software flow (Vitis / PetaLinux): a fixed (non-DFX) platform with the
+    # bitstream embedded. The implemented design is still open from open_run impl_1 above.
+    write_hw_platform -fixed -include_bit -force $BUILD_DIR/$TOP_MODULE.xsa
+    puts "\[run\] hardware platform -> $BUILD_DIR/$TOP_MODULE.xsa"
   }
 }

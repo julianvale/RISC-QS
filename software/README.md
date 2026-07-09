@@ -1,60 +1,39 @@
-# riscq software framework
+# riscq control software
 
-Implementation of the control-software framework specified in [`docs/software/`](../docs/software/).
-Each module is the smallest thing that works and is gated by a self-checking test that reuses an
-existing SpinalSim scenario (or the hand-written golden `pulse_sched.S`) as the reference, keeping the
-software honest against the real RTL.
+The Python package for the riscq PulseTableSoc: kernel compiler (`riscq.lang`), build/run layers
+(`riscq.build`/`riscq.run`), driver backends (`riscq.driver`), co-sim (`riscq.sim`), calibrations
+(`riscq.cal`), and the ZCU216 board side (`riscq.board`). Design of record:
+[specs/software/](../specs/software/README.md).
 
-## Layout
+## Install
 
-```
-software/
-  firmware/                 # module 02 — bare-metal C (the on-core program)
-    include/riscq.h         #   GENERATED from contract.py (python -m riscq.gen_header)
-    crt0.S  riscq.ld  Makefile
-    examples/               #   pulse.c, readout.c, vna.c, vna_point.c
-  python/riscq/
-    contract.py             # module 01 — address maps + encodings (single source of truth)
-    socconfig.py            #   unit conversions + address helpers + JSON snapshot
-    gen_header.py           #   contract.py → firmware/include/riscq.h
-    driver/                 # module 03 — Driver ABC + dummy/pynq backends
-    soc.py                  #   Soc facade + ELF loader
-    pulse.py  program.py    # module 04 — envelopes + packer + sequence DSL → C → ELF
-    remote.py  remote_cli.py# module 05 — Pyro5 server + RemoteDriver
-    cosim/                  # module 06 — CocotbDriver + AdcSource + runner (+ examples)
-  deploy/riscq-rpc.service  #   systemd unit for the board-side RPC server
-```
+Host (dev machine): `pip install -e .[cal]` — scipy is the `cal` extra (fit helpers only);
+the co-sim additionally needs the dev environment's cocotb + verilator + riscv-gcc.
 
-## Install / test
+## Board install (offline, spec 10 §2)
+
+The ZCU216 ARM runs the same wheel with only numpy + Pyro5 (already-shipped PYNQ packages
+`pynq`/`xrfclk`/`xrfdc` are used but never pip-installed). The board has no internet:
 
 ```bash
-cd software/python
-pip install -e .                       # numpy + pyelftools (board/remote/cosim extras optional)
-python -m pytest                       # full suite (the cosim golden Verilates the DUT, ~45s)
-RISCQ_SKIP_COSIM=1 python -m pytest    # fast suite (skip the heavy cocotb run)
+# on a connected machine (numpy is already on the PYNQ image)
+pip download riscq Pyro5 serpent -d wheels/        # or: pip wheel . -w wheels/ from this dir
+scp -r wheels/ xilinx@<board>:
+
+# on the board
+pip install --no-index --find-links wheels/ riscq
 ```
 
-The firmware builds with stock RV32I clang (`cd software/firmware && make`); `python -m riscq.gen_header`
-regenerates `riscq.h` from the contract.
+`tests/test_packaging.py` gates this in CI: the board module surface must import with only
+numpy + Pyro5 installed.
 
-## How the tests anchor to the RTL
+## Board server
 
-| Module | Test | Golden reference |
-|---|---|---|
-| 01 contract | `test_contract.py` | addresses in `pulse_sched.S` + `Zcu216Top.SocMemoryMap` |
-| 02 firmware | `test_firmware.py` + `PulseTableSocCpuSim` (`RISCQ_ELF=…/pulse.elf`) | `pulse_sched.S` write-set; drives DAC on real RTL |
-| 03 driver | `test_driver.py` | the host-AXI image `PulseTableSocCpuSim` streams to `coreMemOffset` |
-| 04 pulse/program | `test_pulse_program.py` + `PulseTableSocCpuSim` (DSL-generated ELF) | `pulse_sched.S`; envelope layout vs `expandEnv`/`loadEnv` |
-| 05 remote | `test_remote.py` | identical write logs local vs over a localhost daemon |
-| 06 cosim | `test_cosim.py` | reproduces `PulseTableSocSim` Parts 1+3 (AXI round-trip + VNA selectivity) |
+```bash
+riscq-board-server [--bits ~/riscq-bits] [--bundle <name>] [--host 0.0.0.0] [--port 9091]
+# → riscq board server @ PYRO:riscq.board@0.0.0.0:9091   (bundle: <name>)
+```
 
-## Notes / deviations from the spec
-
-- The host-AXI region bases scale with `qubit_num` (`region_size = pow2ceil(max_stride · qubit_num)`),
-  so the 2-qubit sim build lays regions out differently from the 14-qubit default — `contract.py`
-  derives them rather than hard-coding the 14q numbers.
-- The available `/config/build/riscv-install/bin/clang` is a fork that pads hazard NOPs by default;
-  harmless on our hazard-handling core (correctness unaffected, slightly larger images).
-- The cosim drives the **ELF flow** over the top-level host AXI + ADC/DAC ports (the test-tap is
-  `simPublic`, not a port), i.e. the production path — no RTL change beyond a small `CosimGen` entry.
-- `fs` (DAC sample rate) defaults to 8 GSPS in `SocConfig`; pin it per build (open question, 01 §7).
+Gateware reaches the board as a **bundle** (`top.xsa` + `params.json` + optional `board.json`)
+uploaded over the same Pyro5 connection — `riscq.driver.remote.upload_bundle(drv, name, ...)`,
+then `drv.board.load(name)`. See [specs/software/10-hardware-driver.md](../specs/software/10-hardware-driver.md).

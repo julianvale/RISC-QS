@@ -50,7 +50,8 @@ class RiscqProbe(dut: Riscq, p: RiscqParam, hartId: Int = 0, kb: Option[konata.B
     backends += b
     b.newCpuMemoryView(hartId, 16, 16)
     // ISA string for Spike must match the enabled extensions, else it decodes them as illegal.
-    val isa = s"RV${p.xlen}I" + (if (p.withMul) "M" else "")
+    // The core is multiply-only (no divide), so the extension is Zmmul, not full M.
+    val isa = s"RV${p.xlen}I" + (if (p.withMul) "_Zmmul" else "")
     b.newCpu(hartId, isa, "M", p.xlen, 0, hartId)
     // RVLS/Spike treats every address as MMIO and faults on any fetch/load/store outside a
     // declared region. riscq has a single flat RAM (the testbench's SparseMemory image), so

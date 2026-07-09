@@ -45,7 +45,13 @@ case class Dut(label: String, emit: String => SpinalReport[_ <: Component])
  *   - `RISCQ_VIVADO_BIN`, `RISCQ_DEVICE`, `RISCQ_FMAX_TARGET_MHZ`, `RISCQ_FMAX_TOP_PATHS`.
  */
 object VivadoBench {
-  val vivadoBin = sys.env.getOrElse("RISCQ_VIVADO_BIN", "/opt/Xilinx/Vivado/2024.2/bin")
+  val vivadoBin = sys.env.getOrElse("RISCQ_VIVADO_BIN", resolveVivadoBin)
+  // Default to the `vivado` on PATH (its bin dir); RISCQ_VIVADO_BIN overrides. Falls back to the
+  // 2026.1 install if PATH has none.
+  def resolveVivadoBin: String =
+    sys.env.getOrElse("PATH", "").split(File.pathSeparatorChar)
+      .map(new File(_, "vivado")).find(_.canExecute).map(_.getParent)
+      .getOrElse("/opt/Xilinx/2026.1/Vivado/bin")
   val device    = sys.env.getOrElse("RISCQ_DEVICE", "xczu49dr-ffvf1760-2-e")
   val targetMhz = sys.env.getOrElse("RISCQ_FMAX_TARGET_MHZ", "1000").toDouble
   val topPaths  = sys.env.getOrElse("RISCQ_FMAX_TOP_PATHS", "15").toInt

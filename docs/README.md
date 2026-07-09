@@ -14,7 +14,7 @@ individual modules plug into.
 
 ## RISC-V control core — `riscq.riscv`
 
-The single-issue, in-order, pipelined RV32I core (optional M extension). **Start with the
+The single-issue, in-order, pipelined RV32I core (optional Zmmul multiply-only extension). **Start with the
 [core overview](riscv/RISCV.md).**
 
 | Doc | What |
@@ -58,7 +58,6 @@ and phase encodings live there); read [DSP48](dsp/DSP48.md) before any DSP-heavy
 | [EnvelopeReader](dsp/EnvelopeReader.md) | Complex-envelope memory front-end |
 | [PulseGeneratorAligned](dsp/PulseGeneratorAligned.md) | QubiC-style SRL-aligned variant |
 | [ReadoutDecoder](dsp/ReadoutDecoder.md) | Demodulating readout integrator + 1-bit discrimination |
-| [DemodCarrierGenerator](dsp/DemodCarrierGenerator.md) | Readout reference carrier / demod NCO |
 | [TimedQueue](dsp/TimedQueue.md) | Lead-time fire scheduler (decouples enqueue from fire) |
 
 ## On-chip memory — `riscq.memory`
@@ -90,6 +89,7 @@ The multi-qubit SoC tying cores to converter-edge DSP over a narrow posted link.
 | [MemMapFiber](soc/MemMapFiber.md) | Memory-mapped register block on the fabric |
 | [DualClockRamFiber](soc/DualClockRamFiber.md) | Clock-crossing RAM bank as a fabric slave |
 | [BramFiber](soc/BramFiber.md) | Clock-crossing BRAM-blackbox bank as a fabric slave |
+| [BramWriteFiber](soc/BramWriteFiber.md) | Write-only clock-crossing BRAM bank (host-loaded envelope memory) |
 | [PostedStoreShim](soc/PostedStoreShim.md) | Local-ack posted-store adapter |
 | **link** — [RfLinkBridge](soc/RfLinkBridge.md) | Core-side posted-write funnel |
 | [RfLink](soc/RfLink.md) | The down-link payload, pipe, and demux |
@@ -125,3 +125,4 @@ with the [software framework overview](software/README.md).**
 | [04 — pulse & program](software/04-pulse-and-program.md) | Envelope generation + the sequence DSL |
 | [05 — remote](software/05-remote.md) | Pyro5 server / proxy |
 | [06 — co-sim](software/06-cosim.md) | cocotb backend + qutip ADC injection |
+| [board server](software/board-server.md) | Running riscq on the ZCU216: offline install, bundles, `riscq-board-server`, `RemoteDriver` |

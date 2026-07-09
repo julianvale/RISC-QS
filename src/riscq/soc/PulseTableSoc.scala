@@ -11,6 +11,8 @@ import spinal.lib.bus.misc.SizeMapping
 import riscq.dsp.{AdderTree, ComplexBatch}
 import riscq.riscv.RiscqParam
 import riscq.soc.fabric.{BramFiber, MemMapDriverFiber}
+import scala.collection.mutable.LinkedHashMap
+import scala.collection.mutable
 
 /**
  * Multi-qubit control SoC — the agentic reproduction of the RISC-Q reference `PulseTableSoc`. One
@@ -19,7 +21,7 @@ import riscq.soc.fabric.{BramFiber, MemMapDriverFiber}
  * real-time datapath.
  *
  * The toplevel: bridges `io.axi` → Tilelink and fans it to per-core instruction memory, per-core
- * pulse memory, the readout buffers (`robs`) and a host control block (`riscqReset` / `fromHost` /
+ * pulse memory, the readout buffers (`robs`) and a host control block (`riscqReset` /
  * 64-bit `timeOffset`); builds the shared `time` from a free-running `refTime + timeOffset`; maps
  * logical DAC/ADC **channels** to physical converters (`dacMap`/`adcMap`), summing channels that share
  * a DAC with [[AdderTree]]; and streams a readout trace into `robs` on pulse fire.
@@ -51,30 +53,43 @@ case class PulseTableSoc(
     coreParam: RiscqParam = RiscqParam(gshareMem = true, csrWarl = true,
       aluNoFastForward = true, aluResultOneHot = true, pcRegMaxFanout = 16),
     // routability levers: readout-drive envelope interpolation (readout = 16) shrinks the widest BRAM
-    // bank 16×; `converterPipe` registers the DAC/ADC converter boundary to shorten the long nets into
-    // the RFDC edge. fmax is soft, so the extra latency is acceptable.
+    // bank 16×. fmax is soft, so the extra latency is acceptable.
     readoutInterp: Int = 16,
     gateInterp: Int = 4,
-    converterPipe: Int = 2,
+    // demod-carrier envelope interpolation (default 4 = fully interpolated at adcBatch 4 ⇒ 32-bit line,
+    // direct host wire). Lower for finer per-ADC-lane matched-filter weights; the envelope is typically
+    // square, so the coarse default suffices and keeps the demod bank cheap.
+    demodInterp: Int = 4,
     // narrow posted-link RF architecture: each core funnels its RF writes onto a per-core posted link
     // (bridge + `linkPipe` RegNext stages + demux to converter-edge channels), so cores can be
     // floorplanned far from the converters. `linkPipe` is the per-direction depth.
     linkPipe: Int = 4,
-    memDepth: Int = 1024,
+    memDepth: Int = 4096,
+    envDepth: Int = 1024,
+    robDepth: Int = 1024,
+    gatePulseNum: Int = 8,
+    // per-parameter TimedQueue depth in every drive/demod PulseGenerator — how many pulses software
+    // can schedule ahead per channel parameter before the queue back-pressures. Deeper = more
+    // scheduled-ahead headroom at a per-queue FF/LUT cost (the six queues per generator × every channel).
+    queueDepth: Int = 4,
+    // specs/dsp-fmax.md converter-edge lever, default off / bit-exact (the B1-alt gate-table distributed
+    // RAM and the B2 dcOffset MAX_FANOUT cap are baked into PulseParamBuffer; the B3 queue lean-pop into
+    // TimedQueue; the C1 registered head is a TimedQueue-level option, no longer plumbed here).
+    adcPipe: Int = 3,                   // C2: register stages on the ADC nets off the RFDC edge
 ) extends Zcu216Top(dacNum = dacNum, adcNum = adcNum, dacBatch = 16, adcBatch = 4, dataWidth = 16, vivado = vivado) {
   val N        = 16    // DAC drive batch
   val adcBatch = 4
   val w        = 16
   val envWidth = N * 2 * w           // 512-bit complex pulse-envelope line
-  val envDepth = 1024
+  val demodEnvFull = adcBatch * 2 * w             // full demod-carrier envelope line (128 at adcBatch 4)
   val readoutEnvWidth = envWidth / readoutInterp  // interpolated readout-drive envelope line (32 at 16)
   val gateEnvWidth    = envWidth / gateInterp     // interpolated gate-drive envelope line (128 at 4)
+  val demodEnvWidth   = demodEnvFull / demodInterp // interpolated demod-carrier envelope line (32 at 4)
   val robWidth = adcBatch * 32       // 4 readout lanes × 32-bit (no overflow summing ≤16 ADCs)
-  val robDepth = 256
 
-  // ── host AXI → Tilelink ── blockSize ≥ the widest memory word (the 512-bit = 64-byte envelope
-  // line), so its WidthAdapter can negotiate a full-word transfer; each fiber's decoder restricts the
-  // size down to what that fiber supports (the 32-bit memories stay single-beat).
+  // ── host AXI → Tilelink ── blockSize ≥ the widest full-word transfer (the robs WidthAdapter's
+  // 128-bit / 16-byte line); each fiber's decoder restricts the size down to what it supports. The
+  // write-only envelope banks load 32-bit sub-word (no WidthAdapter), so they never need a wide burst.
   val bridge = new Axi4ToTilelinkFiber(blockSize = 64, slotsCount = 4)
   bridge.up load io.axi
   val hostBus = Node()
@@ -86,30 +101,27 @@ case class PulseTableSoc(
     coreMemBytes    = 1 << 16,
     pulseMemBytes   = 1 << log2Up(gateEnvWidth * envDepth / 8),      // gate-drive bank (interpolated)
     readoutEnvBytes = 1 << log2Up(readoutEnvWidth * envDepth / 8),   // readout-drive bank (interpolated)
+    demodEnvBytes   = 1 << log2Up(demodEnvWidth * envDepth / 8),     // demod-carrier bank (interpolated)
     readoutBufBytes = 2 * (1 << log2Up(robWidth * robDepth / 8))     // 2 robs
   )
 
-  // The gate-drive envelope is wider than the 32-bit host bus; a WidthAdapter upsizes each 4-byte host
-  // access into a masked wide-word transfer (so the host fills a 512-bit envelope line with 16 partial
-  // writes). The 32-bit instruction memory needs no adapter and connects directly.
-  val pulseMemWa = WidthAdapter()
-  pulseMemWa.up at SizeMapping(map.pulseMemBase, map.regionSize) of hostBus
-  val pulseMemBus = Node()
-  pulseMemBus at SizeMapping(0, map.regionSize) of pulseMemWa.down
-
-  // The interpolated readout-drive envelope is 32-bit at interp 16 (= host width) ⇒ wires direct off
-  // hostBus like the instruction RAM (no WidthAdapter); a wider line (smaller interp) gets an adapter.
+  // The three envelope banks are write-only (BramWriteFiber): each core's fiber steers a 32-bit host
+  // beat straight into the addressed sub-word lane of its wide line, so NO WidthAdapter is needed. The
+  // per-bank regions are decoded off hostBus as NARROW 32-bit fan-out buses, so only 32-bit nets cross
+  // the die and every wide envelope net stays local to its core (saving routing). The 32-bit
+  // instruction memory (riscqMemBus) likewise wires direct.
+  val pulseMemBus   = Node()
   val readoutEnvBus = Node()
-  if (readoutEnvWidth <= 32) {
-    readoutEnvBus at SizeMapping(map.readoutEnvBase, map.regionSize) of hostBus
-  } else {
-    val readoutEnvWa = WidthAdapter()
-    readoutEnvWa.up at SizeMapping(map.readoutEnvBase, map.regionSize) of hostBus
-    readoutEnvBus at SizeMapping(0, map.regionSize) of readoutEnvWa.down
-  }
-
-  val riscqMemBus = Node()
-  riscqMemBus at SizeMapping(map.coreMemBase, map.regionSize) of hostBus
+  val demodEnvBus   = Node()
+  val riscqMemBus   = Node()
+  pulseMemBus   at SizeMapping(map.pulseMemBase,   map.regionSize) of hostBus
+  pulseMemBus.setUpConnection(a = StreamPipe.FULL, d = StreamPipe.FULL)
+  readoutEnvBus at SizeMapping(map.readoutEnvBase, map.regionSize) of hostBus
+  readoutEnvBus.setUpConnection(a = StreamPipe.FULL, d = StreamPipe.FULL)
+  demodEnvBus   at SizeMapping(map.demodEnvBase,   map.regionSize) of hostBus
+  demodEnvBus.setUpConnection(a = StreamPipe.FULL, d = StreamPipe.FULL)
+  riscqMemBus   at SizeMapping(map.coreMemBase,    map.regionSize) of hostBus
+  riscqMemBus.setUpConnection(a = StreamPipe.FULL, d = StreamPipe.FULL)
 
   val robs = BramFiber(1, robWidth, robDepth, hostCd, dspCd, withOutReg = true)
   val robAdapter = WidthAdapter()
@@ -123,16 +135,19 @@ case class PulseTableSoc(
 
   /** Converter-boundary pipeline: `converterPipe` extra register stages on the long DAC/ADC nets
    *  into/out of the RFDC edge. converterPipe = 0 ⇒ identity (no behavioural change). */
-  def pipe[T <: Data](x: T): T = (0 until converterPipe).foldLeft(x)((s, _) => RegNext(s))
+  def pipe[T <: Data](x: T, converterPipe: Int): T = (0 until converterPipe).foldLeft(x)((s, _) => RegNext(s))
 
   val riscqArea = new ClockingArea(dspCd) {
-    val refTime    = riscqCd(Reg(UInt(64 bit)) init 0)
+    // Free-running batch-time counter in dspCd: it is NOT reset by riscqReset, so batch time is monotonic
+    // across runs (only the external dspRst zeroes it). This keeps a leftover TimedQueue entry from a prior
+    // run in the *past* rather than the future, so it drains on its own and a run needs no per-run flush.
+    // Software works in now()-relative time, so the non-zero base is transparent.
+    val refTime    = Reg(UInt(64 bit)) init 0
     refTime := refTime + 1
     val timeOffset = Reg(UInt(64 bit)) init 0
     val syncTime   = RegNext(refTime + timeOffset)
     val time       = RegNext(syncTime(0, 32 bits))
     time.addAttribute("MAX_FANOUT", 16)
-    val fromHost   = Reg(Bits(32 bit)) init 0
 
     // per-core batch-clock replica: each core gets an independent register fed from the same `syncTime`,
     // so it is value-identical to `time` every cycle (no skew); EQUIVALENT_REGISTER_REMOVAL=NO stops
@@ -152,9 +167,10 @@ case class PulseTableSoc(
     val riscqCores = List.tabulate(qubitNum)(i =>
       RiscqRfWithPulseTableFiber(
         plugins = cp.plugins(), dspCd = dspCd, hostCd = hostCd, riscqCd = riscqCd,
-        time = coreTimes(i), fromHost = fromHost, batchSize = N, dataWidth = w, adcBatch = adcBatch,
-        envDepth = envDepth, readoutInterp = readoutInterp, gateInterp = gateInterp,
-        linkPipe = linkPipe, withTestTap = withTest, memDepth = memDepth))
+        time = coreTimes(i), batchSize = N, dataWidth = w, adcBatch = adcBatch,
+        envDepth = envDepth, readoutInterp = readoutInterp, gateInterp = gateInterp, demodInterp = demodInterp,
+        linkPipe = linkPipe, withTestTap = withTest, memDepth = memDepth, gatePulseNum = gatePulseNum,
+        queueDepth = queueDepth))
 
     // floorplan: keep each core's RiscvSoc a hard synth boundary so opt can't merge logic across the
     // identical cores into a MUXF7/F8 macro that straddles two per-core pblocks. The shared host AXI fans
@@ -162,12 +178,18 @@ case class PulseTableSoc(
     // between cores. Synthesis-only attribute — zero behavioural change, sims ignore it.
     riscqCores.foreach(_.riscvSoc.addAttribute("KEEP_HIERARCHY", "TRUE"))
 
-    // host fan-out: per-core instruction memory (direct) + gate-drive envelope (via the WidthAdapter
-    // bus) + readout-drive envelope (direct); offsets are relative to each region bus (rebased to 0).
+    // host fan-out: per-core instruction memory + the three write-only envelope banks all wire DIRECT to
+    // their narrow 32-bit region bus — each envelope fiber bridges a 32-bit host beat into its wide line
+    // locally (no WidthAdapter). Offsets are relative to each region bus (rebased 0).
     for ((core, i) <- riscqCores.zipWithIndex) {
-      core.iMemPortArb at SizeMapping(i * map.coreStride, map.coreStride) of riscqMemBus
-      core.pulseMemFiber.up at SizeMapping(i * map.pulseStride, map.pulseStride) of pulseMemBus
+      core.iMemPortArb        at SizeMapping(i * map.coreStride,       map.coreStride)       of riscqMemBus
+      core.iMemPortArb.setUpConnection(a = StreamPipe.FULL, d = StreamPipe.FULL)
+      core.pulseMemFiber.up   at SizeMapping(i * map.pulseStride,      map.pulseStride)      of pulseMemBus
+      core.pulseMemFiber.up.setUpConnection(a = StreamPipe.FULL, d = StreamPipe.FULL)
       core.readoutMemFiber.up at SizeMapping(i * map.readoutEnvStride, map.readoutEnvStride) of readoutEnvBus
+      core.readoutMemFiber.up.setUpConnection(a = StreamPipe.FULL, d = StreamPipe.FULL)
+      core.demodMemFiber.up   at SizeMapping(i * map.demodEnvStride,   map.demodEnvStride)   of demodEnvBus
+      core.demodMemFiber.up.setUpConnection(a = StreamPipe.FULL, d = StreamPipe.FULL)
     }
 
     // optional test masters so a sim can drive each core's RF/control (CPU is held in reset). Each core
@@ -185,47 +207,64 @@ case class PulseTableSoc(
       mb
     }
 
-    // ── DAC: per physical DAC, sum the real lanes of every logical channel mapped to it ──
-    val dacPayloads = (0 until dacNum).map { dacId =>
-      // NB: `.toList` BEFORE `.collect` — collecting `(c, ch)` tuples straight off the Map would
-      // rebuild a Map[c, ch], so two channels of the same core (gate ch0 + readout ch1) would collide
-      // on key `c` and the gate would be silently dropped. On a List the result is a plain List[(c,ch)].
-      val channels = dacMap.toList.collect { case ((c, ch), id) if id == dacId => (c, ch) }
-      val pulses   = channels.map { case (c, ch) => riscqCores(c).dac(ch) }
-      val payload  = cloneOf(io.dac(dacId).payload)
-      io.dac(dacId).payload := pipe(payload)   // extra register stages into the RFDC edge
+    // ── DAC: per physical DAC, sum the real lanes of every logical channel mapped to it, then pad
+    // every DRIVEN DAC to one shared pipeline depth from a core's `dac(ch)` to `io.dac`, so every pulse
+    // generator sees the same register count to the converter edge — gate and readout drives (whether on
+    // their own DAC or summed with others) all leave time-aligned. The natural "combine" latency differs
+    // per DAC — a single channel is a pass-through (0), an n-channel sum costs `AdderTree.latency(n)+1` —
+    // so pad each path up to the deepest one.
+    //
+    // NB: `.toList` BEFORE `.collect` — collecting `(c, ch)` tuples straight off the Map would rebuild a
+    // Map[c, ch], so two channels of the same core (gate ch0 + readout ch1) would collide on key `c` and
+    // the gate would be silently dropped. On a List the result is a plain List[pulse].
+    val dacChannels = (0 until dacNum).map { dacId =>
+      dacMap.toList.collect { case ((c, ch), id) if id == dacId => riscqCores(c).dac(ch) }
+    }
+    def combineLatency(n: Int) = if (n <= 1) 0 else AdderTree.latency(n) + 1
+    val dacAlignStages = dacChannels.map(p => combineLatency(p.size)).max
+
+    val dacPayloads = dacChannels.zipWithIndex.map { case (pulses, dacId) =>
+      val payload = cloneOf(io.dac(dacId).payload)
+      io.dac(dacId).payload := pipe(payload, 1)   // one shared stage into the RFDC edge
       if (pulses.isEmpty) {
-        payload := 0
-      } else if (pulses.size == 1) {
-        payload := RegNext(Vec(pulses.head.map(_.re)).asBits)              // single channel: pass-through
+        payload := 0                              // no generator maps here — nothing to align
       } else {
-        // No saturation on the co-mapped channel sum: it wraps modulo 2^w (keep the low w bits),
-        // matching the QubiC reference (elementsum "not checking overflow, depends on user"). Software
-        // keeps the summed channels within full-scale; dropping the saturating clamp also takes its
-        // comparators/muxes off the DAC converter-boundary path.
-        val accW  = w + log2Up(pulses.size)
-        val sums  = (0 until N).map(k => RegNext(AdderTree(pulses.map(_(k).re), accW).resize(w)))
-        payload := Vec(sums).asBits
+        val combined =
+          if (pulses.size == 1) Vec(pulses.head.map(_.re)).asBits    // single channel: pass-through
+          else {
+            // No saturation on the co-mapped channel sum: it wraps modulo 2^w (keep the low w bits),
+            // matching the QubiC reference (elementsum "not checking overflow, depends on user"). Software
+            // keeps the summed channels within full-scale; dropping the saturating clamp also takes its
+            // comparators/muxes off the DAC converter-boundary path.
+            val accW = w + log2Up(pulses.size)
+            Vec.tabulate(N)(k => RegNext(AdderTree(pulses.map(_(k).re), accW).resize(w))).asBits
+          }
+        // pad this DAC's combine path up to the deepest driven DAC so every generator sees one depth.
+        payload := pipe(combined, dacAlignStages - combineLatency(pulses.size))
       }
       payload
     }
 
-    // ── ADC: buffer the real lanes, fan to the mapped cores (im = 0) ──
-    val adcs    = Vec.fill(adcNum)(Vec.fill(adcBatch)(SInt(w bits)))
-    (adcs zip io.adc).foreach { case (o, i) => o.assignFromBits(i.payload) }
-    val adcBufs = adcs.map(a => pipe(RegNext(a)))   // extra register stages off the RFDC edge
+    // ── ADC: buffer the real lanes of only the MAPPED converters, fan to the mapped cores (im = 0).
+    // Unmapped physical ADCs are left untouched — no buffer registers, no contribution to the trace. ──
+    val mappedAdcIds = adcMap.values.toList.distinct.sorted
+    val adcBufs = mappedAdcIds.map { adcId =>
+      val a = Vec.fill(adcBatch)(SInt(w bits))
+      a.assignFromBits(io.adc(adcId).payload)
+      adcId -> pipe(a, adcPipe).addAttribute("max_fanout", 4)   // extra register stages off the RFDC edge
+    }.toMap
     for ((coreId, adcId) <- adcMap) {
       (riscqCores(coreId).adc zip adcBufs(adcId)).foreach { case (o, i) => o.re := i; o.im := 0 }
     }
 
     // ── readout trace into robs on any drive-pulse fire ──
-    val anyPulseValid = riscqCores.map(_.gatePulse.valid).reduce(_ | _)
-    val fire   = RegNext(anyPulseValid) init False
-    val rbAddr = Reg(UInt(log2Up(robDepth) bits)) init 0
+    val anyPulseValid = riscqCores.map(_.readoutPulse.valid).reduceBalancedTree(_ | _, (s, _) => RegNext(s))
+    val fire   = RegNext(anyPulseValid)
+    val rbAddr = Reg(UInt(log2Up(robDepth) bits))
     when(fire)(rbAddr := rbAddr + 1).otherwise(rbAddr := 0)
 
-    // robs(0): per-lane sum of all ADC inputs (a 32-bit-per-lane integrated trace).
-    val adcSum = Vec.tabulate(adcBatch)(k => AdderTree(adcBufs.map(_(k)), 32))
+    // robs(0): per-lane sum of the MAPPED ADC inputs (a 32-bit-per-lane integrated trace).
+    val adcSum = Vec.tabulate(adcBatch)(k => RegNext(AdderTree(mappedAdcIds.map(id => adcBufs(id)(k)), 32)))
     val rb0 = robs.rams(0).fastPort
     rb0.enable := True; rb0.mask.setAllTo(True)
     rb0.address := RegNext(rbAddr); rb0.write := fire
@@ -243,12 +282,9 @@ case class PulseTableSoc(
 
   val timeOffset = Reg(UInt(64 bit)) init 0
   riscqArea.timeOffset := dspCd(BufferCC(timeOffset))
-  val fromHost = Reg(Bits(32 bit)) init 0
-  riscqArea.fromHost := dspCd(BufferCC(fromHost))
 
   val hostCtrlDriver = MemMapDriverFiber(addressWidth = 10, dataWidth = 32, driveProc = { factory =>
     factory.drive(riscqResetHostCd, 0)
-    factory.write(fromHost, 16)
     factory.write(timeOffset(0, 32 bits), 64)
     factory.write(timeOffset(32, 32 bits), 68)
   })
@@ -259,7 +295,6 @@ case class PulseTableSoc(
     riscqArea.riscqCores(0).riscvSoc.dMemPortDec.bus.get.simPublic()
     if (withTest) {
       riscqArea.time.simPublic()
-      riscqArea.fire.simPublic()
       riscqArea.riscqCores(0).gatePulse.valid.simPublic()
       riscqArea.testMasters.foreach(_.node.bus.get.simPublic())
     }
@@ -273,7 +308,7 @@ case class PulseTableSoc(
  */
 object SocChannelMap {
   def readoutDriverConverter(core: Int): Int = if (core < 7) 14 else 15
-  def readoutConverter(core: Int): Int = if (core < 7) 0 else 1
+  def readoutConverter(core: Int): Int = if (core < 7) 0 else 4
   def gateConverter(core: Int): Int = core
   def dacMap(qubitNum: Int): Map[(Int, Int), Int] =
     (0 until qubitNum).flatMap(c => List((c, 0) -> gateConverter(c), (c, 1) -> readoutDriverConverter(c))).toMap

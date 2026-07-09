@@ -52,8 +52,19 @@ at the end. Set `RISCQ_PROJ_NAME=<name>` to build into `<repo>/build/<name>` ins
 | File | Role |
 |---|---|
 | `build-riscvsoc.sh` | driver: generate RTL via mill, then run Vivado OOC P&R in the workspace |
+| `build-coreband.sh` | single-core band bench (riscv-fmax A2) — one `RiscvSoc` in SoC context @ 526 MHz |
+| `build-dspband.sh` | DSP-cone A/B vehicle (dsp-fmax A2) — same flow on a per-variant **config JSON** |
+| `configs/dspband-3q*.json` | one JSON per dspband variant (baseline + one lever each + the stack) |
+| `cone-shapes.sh` | mechanism-level shape counts over `cones_paths.tsv` (the dspband verdict currency) |
 | `riscvsoc-pnr.tcl` | the OOC flow — config, synth+retiming, two-clock setup, P&R, reports |
 | `pblocks-riscvsoc.tcl` | the §11 floorplan — pblock helpers + datapath confine + per-core X0 bands |
+
+`build-dspband.sh` notes: the lever state lives in the JSON (copied into the build folder as
+`config.json`); the default bench target is 526 MHz, but the calibrated dsp-fmax operating point is
+**1.8 ns** (`RISCQ_FMAX_TARGET_MHZ=555.56`) — and there per-build slack is placement-chaotic across
+different netlists, so lever verdicts are **structural** (shape presence / logic levels / arc counts
+via `cone-shapes.sh`), not slack deltas. It also runs the 14q confirmation builds by passing
+`software/configs/zcu216-14q-dspstack.json` with `RISCQ_FMAX_TARGET_MHZ=500 RISCQ_CONES_SLACK_LT=0`.
 
 The single Scala touch-point is the generator `riscq.soc.GenPulseTableSocOoc`
 (in `src/riscq/soc/PulseTableSoc.scala`) — SpinalHDL→Verilog elaboration is the one step that cannot be
@@ -65,7 +76,7 @@ Handled by `build-riscvsoc.sh`:
 
 | Var | Default | Meaning |
 |---|---|---|
-| `RISCQ_VIVADO_BIN` | `/opt/Xilinx/Vivado/2024.2/bin` | Vivado install |
+| `RISCQ_VIVADO_BIN` | the `vivado` on `PATH` | Vivado install (`bin` dir) |
 | `RISCQ_QUBITS` | `14` | qubit count → RTL gen |
 | `RISCQ_PROJ_NAME` | `riscvsoc` | build-folder name under `<repo>/build/` (parallel designs) |
 | `RISCQ_SKIP_GEN` | `0` | `1` = reuse existing workspace RTL, skip mill |

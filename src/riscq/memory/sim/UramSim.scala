@@ -12,9 +12,9 @@ import scala.util.Random
  * Self-checking testbench for [[Uram]] (the UltraRAM blackbox + its Verilog template), checked
  * against a software byte-addressable memory model. Exercises, on the `-2` RFSoC default clock:
  *
- *   - '''Latency:''' a read presented at cycle `t` returns at the output exactly `NBPIPE + 1` cycles
- *     later (one memory-read register + `NBPIPE` output stages) — asserted as a single spike so the
- *     declared latency is sharp (the readout/scheduler alignment math depends on it).
+ *   - '''Latency:''' a read presented at cycle `t` returns at the output exactly `NBPIPE + 2` cycles
+ *     later (memory-read register + `NBPIPE` output stages + `dout` register) — asserted as a single
+ *     spike so the declared latency is sharp (the readout/scheduler alignment math depends on it).
  *   - '''Both ports, read + write:''' write the whole array via port 0, then read it all back through
  *     *both* ports bit-exact (each port has its own read datapath).
  *   - '''Byte masks:''' masked writes update only the enabled byte columns; read-back is bit-exact
@@ -41,7 +41,7 @@ object UramSim extends App {
   def run(width: Int, addrW: Int, pipeNum: Int): Long = {
     val nBytes  = width / 8
     val depth   = 1 << addrW
-    val L       = pipeNum + 1                       // address -> dout latency
+    val L       = pipeNum + 2                       // address -> dout latency (memreg + NBPIPE + dout)
     val fullMsk = (BigInt(1) << nBytes) - 1
     val wMask   = (BigInt(1) << width) - 1
     var checks  = 0L
@@ -155,7 +155,7 @@ object UramSim extends App {
   val configs = Seq((32, 7, 3), (32, 6, 1), (64, 5, 2), (16, 5, 3))
   for ((w, a, p) <- configs) {
     val c = run(w, a, p)
-    println(s"[UramSim] PASS  width=$w addrW=$a pipeNum=$p (latency=${p + 1}): $c reads bit-exact.")
+    println(s"[UramSim] PASS  width=$w addrW=$a pipeNum=$p (latency=${p + 2}): $c reads bit-exact.")
   }
   println("[UramSim] all configs PASS")
 }

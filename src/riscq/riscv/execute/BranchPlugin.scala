@@ -193,6 +193,10 @@ class BranchPlugin(p: RiscqParam) extends FiberPlugin {
         val directionWrong = apply(Fetch.PREDICTED_TAKEN) =/= take
         down.isFiring && isCfi && (directionWrong || (take && apply(Execute.BAD_TARGET)))
       }
+      // MAX_FANOUT cap (baked in): this 1-bit decision is the C1 broadcast root (LOAD_DATA capture
+      // pins, CSR wrong-path gates, PC redirect, per-stage throws) — cap its fanout so Vivado
+      // replicates the shallow driving logic per consumer group. Bit-exact (attribute only).
+      mispredict.addAttribute("MAX_FANOUT", 16)
       redirect.valid   := mispredict
       redirect.payload := take ? apply(Execute.TARGET_ALIGNED) | apply(Execute.LINK_PC) // target | PC+4
       // Flush the younger (wrong-path) stages — off the up.ready spine (see PipelinePlugin.throwStagesBefore).

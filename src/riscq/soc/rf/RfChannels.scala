@@ -3,7 +3,7 @@ package riscq.soc.rf
 import spinal.core._
 import spinal.lib._
 import riscq.dsp.{Complex, ComplexBatch, SinCosMethod}
-import riscq.dsp.pulse.{PulseGenerator, PulseGeneratorAligned, PulseGeneratorParams, DemodCarrierGenerator}
+import riscq.dsp.pulse.{PulseGenerator, PulseGeneratorAligned, PulseGeneratorParams}
 import riscq.soc.link.RfCmd
 
 /**
@@ -11,8 +11,11 @@ import riscq.soc.link.RfCmd
  * [[PulseParamBuffer]] (DSP-side register file, driven by the demuxed posted `Flow(RfCmd)`) + a
  * [[PulseGenerator]] + its envelope-RAM read port. Its only CPU-facing input is the `RfCmd` Flow (plus
  * the shared `time` broadcast); it emits the DAC `pulse` and an external envelope-memory `MemReadPort`.
- * No registers cross the Component boundary, so the pulse is bit-exact with the un-packaged
- * composition.
+ * The buffer's memory-mapped `phaseOffset` (virtual Z) is added combinationally to the generator's
+ * phase input — the phase Flow stays cycle-aligned with amp/addr/dur, and the add wraps modulo 2^w,
+ * which is exactly a phase rotation (a full turn = 2^w), so no saturation is needed. On the way out a
+ * single `RegNext` stage adds the buffer's memory-mapped `dcOffset` to every real output lane (the
+ * imaginary lanes and `valid` are registered alongside to keep the batch aligned).
  */
 case class PulseDriveChannel(
     pulseNum: Int,
@@ -26,6 +29,7 @@ case class PulseDriveChannel(
     saturate: Boolean,
     phasorMethod: SinCosMethod,
     realOutput: Boolean,
+    queueDepth: Int = 4,          // per-parameter TimedQueue depth (scheduled-ahead pulses per param)
     rfAddrWidth: Int = 16,
     useAligned: Boolean = false   // false = per-parameter lead-time TimedQueues (PulseGenerator);
                                   // true = QubiC-style single combined params FIFO + SRL alignment
@@ -48,34 +52,49 @@ case class PulseDriveChannel(
   val pgParams = PulseGeneratorParams(
     batchSize = N, dataWidth = w, timeWidth = timeWidth, addrWidth = envAddrWidth, durWidth = durWidth,
     memLatency = memLatency, prescaleAmp = prescaleAmp, saturate = saturate, phasorMethod = phasorMethod,
-    realOutput = realOutput)
+    realOutput = realOutput, queueDepth = queueDepth)
+
+  // The generator's raw pulse (pre-dcOffset), captured here so the dcOffset stage below is shared
+  // across both generator variants.
+  val rawPulse = Flow(ComplexBatch(N, w))
 
   // The two implementations differ only on the parameter-input side; the envelope read port is
-  // forwarded to the external host-writable RAM (no extra register stage) and `pulse` driven out
+  // forwarded to the external host-writable RAM (no extra register stage) and the raw pulse captured
   // identically in each branch.
   if (!useAligned) {
     val pg = PulseGenerator(pgParams)
     pg.io.time := buf.io.time; pg.io.startTime := buf.io.startTime
-    pg.io.phase << buf.io.phase; pg.io.amp << buf.io.amp; pg.io.addr << buf.io.addr
+    pg.io.phase.valid := buf.io.phase.valid; pg.io.phase.payload := buf.io.phase.payload + buf.io.phaseOffset
+    pg.io.amp << buf.io.amp; pg.io.addr << buf.io.addr
     pg.io.dur << buf.io.dur; pg.io.freq << buf.io.freq
     io.memPort.cmd.valid   := pg.io.memPort.cmd.valid
     io.memPort.cmd.payload := pg.io.memPort.cmd.payload
     pg.io.memPort.rsp      := io.memPort.rsp
-    io.pulse << pg.io.pulse
+    rawPulse << pg.io.pulse
   } else {
     val pg = PulseGeneratorAligned(pgParams)
     pg.io.time := buf.io.time; pg.io.startTime := buf.io.startTime
     // amp/phase/addr/dur all fire on buf's shared outParamFlow.valid ⇒ one combined params Flow.
     pg.io.params.valid         := buf.io.amp.valid
     pg.io.params.payload.amp   := buf.io.amp.payload
-    pg.io.params.payload.phase := buf.io.phase.payload
+    pg.io.params.payload.phase := buf.io.phase.payload + buf.io.phaseOffset
     pg.io.params.payload.addr  := buf.io.addr.payload
     pg.io.params.payload.dur   := buf.io.dur.payload
     pg.io.freq << buf.io.freq
     io.memPort.cmd.valid   := pg.io.memPort.cmd.valid
     io.memPort.cmd.payload := pg.io.memPort.cmd.payload
     pg.io.memPort.rsp      := io.memPort.rsp
-    io.pulse << pg.io.pulse
+    rawPulse << pg.io.pulse
+  }
+
+  // dcOffset bias: add the buffer's memory-mapped `dcOffset` to every real output lane, in one RegNext
+  // pipeline stage (`valid`, and the imag lane, registered alongside to keep the batch aligned). The add
+  // wraps modulo 2^w — software keeps the biased sample within range. With `realOutput` the imag lane is
+  // tied to 0 (only the real lane feeds the DAC), matching the generator's own imag pruning.
+  io.pulse.valid := RegNext(rawPulse.valid) init False
+  for (k <- 0 until N) {
+    io.pulse.payload(k).re := RegNext(rawPulse.payload(k).re + buf.io.dcOffset)
+    io.pulse.payload(k).im := (if (realOutput) S(0, w bits) else RegNext(rawPulse.payload(k).im))
   }
 
   /** per-buffer startTime, for the SoC/sim to observe the software-written schedule value. */
@@ -83,38 +102,72 @@ case class PulseDriveChannel(
 }
 
 /**
- * Converter-edge **demod LO channel** — a degenerate channel: posted `freq`@0 / `phase`@4 (the only
- * writes the demod takes) decoded straight off the demuxed `RfCmd` into a free-running
- * [[DemodCarrierGenerator]] (no table / `startTime` / envelope; the LO is not gated). Exposes
- * `io.carrier` for the paired `ReadoutDecoder`.
+ * Converter-edge **demod carrier channel** — the demodulation LO for the paired [[ReadoutDecoder]],
+ * now a **scheduled, envelope-shaped complex pulse** instead of a free-running NCO. It is a
+ * [[PulseDriveChannel]] pointed at the decoder rather than a DAC: a [[PulseParamBuffer]] (posted RF
+ * register file) drives a [[PulseGenerator]] whose complex `pulse` is exported as `io.carrier`, so the
+ * demod carrier gets the same host-writable envelope, `freq`/`phase` table and `startTime` scheduling
+ * as a drive channel. Software programs a (typically square) matched-filter envelope once and fires the
+ * demod pulse aligned with the readout window; the envelope weights each demodulated batch.
+ *
+ * Two deliberate differences from [[PulseDriveChannel]]: `realOutput = false` (the decoder needs the
+ * full complex carrier), and no `dcOffset` output stage (a DC bias is meaningless on a demod carrier),
+ * so `io.carrier` is the raw generator output — one fewer register than the drive path, which keeps the
+ * carrier↔`io.time` alignment (`timeToPulse`) equal to the generator's. The `phaseOffset` (virtual Z)
+ * is kept: it is the live demod-phase tune. When idle the generator zeroes its output, so `io.carrier`
+ * is 0 outside the demod window and the decoder integrates nothing there.
+ *
+ * `io.carrier` is a `Flow`: its `valid` is the generator's scheduled window (`activeReg`, high for
+ * `[startTime, startTime + dur)`), which the carrier-triggered [[ReadoutDecoder]] uses to delimit its
+ * integration window — no separate arm. The payload is zero when invalid (see above), so an idle
+ * carrier contributes exactly nothing to the integral.
  */
 case class DemodChannel(
+    pulseNum: Int,
     batchSize: Int,
     dataWidth: Int,
+    envAddrWidth: Int,
+    durWidth: Int,
     timeWidth: Int,
-    correctGain: Boolean,
+    memLatency: Int,
+    prescaleAmp: Boolean,
     saturate: Boolean,
     phasorMethod: SinCosMethod,
-    rfAddrWidth: Int = 16,
-    freqAddr: Int = 0x0,
-    phaseAddr: Int = 0x4,
-    bitOffset: Int = 16
+    queueDepth: Int = 4,          // per-parameter TimedQueue depth (scheduled-ahead pulses per param)
+    rfAddrWidth: Int = 16
 ) extends Component {
   val N = batchSize; val w = dataWidth
   val io = new Bundle {
-    val cmd     = slave port Flow(RfCmd(rfAddrWidth))
-    val time    = in    port UInt(timeWidth bits)
-    val carrier = out   port ComplexBatch(N, w)
+    val cmd       = slave  port Flow(RfCmd(rfAddrWidth))
+    val timeBcast = in     port UInt(timeWidth bits)
+    val memPort   = master port MemReadPort(Bits(N * 2 * w bits), envAddrWidth)
+    val carrier   = master port Flow(ComplexBatch(N, w))
   }
-  val dcg = DemodCarrierGenerator(N, w, timeWidth, correctGain, saturate, phasorMethod)
-  dcg.io.time := RegNext(io.time).addAttribute("EQUIVALENT_REGISTER_REMOVAL", "NO")
-  val freqCmd = Reg(cloneOf(dcg.io.freq))
-  freqCmd >> dcg.io.freq
-  freqCmd.valid    := io.cmd.valid && (io.cmd.payload.address === freqAddr)
-  freqCmd.payload  := io.cmd.payload.data(bitOffset, w bits).asSInt
-  val phaseCmd = Reg(cloneOf(dcg.io.phase))
-  phaseCmd >> dcg.io.phase
-  phaseCmd.valid   := io.cmd.valid && (io.cmd.payload.address === phaseAddr)
-  phaseCmd.payload := io.cmd.payload.data(bitOffset, w bits).asSInt
-  io.carrier := dcg.io.carrier
+
+  val buf = PulseParamBuffer(PulseParamBufferParams(
+    pulseNum = pulseNum, dataWidth = w, envAddrWidth = envAddrWidth, durWidth = durWidth,
+    timeWidth = timeWidth, addrWidth = rfAddrWidth))
+  buf.io.cmd << io.cmd
+  buf.io.timeBcast := io.timeBcast
+
+  val pg = PulseGenerator(PulseGeneratorParams(
+    batchSize = N, dataWidth = w, timeWidth = timeWidth, addrWidth = envAddrWidth, durWidth = durWidth,
+    memLatency = memLatency, prescaleAmp = prescaleAmp, saturate = saturate, phasorMethod = phasorMethod,
+    realOutput = false, queueDepth = queueDepth))
+  pg.io.time := buf.io.time; pg.io.startTime := buf.io.startTime
+  pg.io.phase.valid := buf.io.phase.valid; pg.io.phase.payload := buf.io.phase.payload + buf.io.phaseOffset
+  pg.io.amp << buf.io.amp; pg.io.addr << buf.io.addr
+  pg.io.dur << buf.io.dur; pg.io.freq << buf.io.freq
+  io.memPort.cmd.valid   := pg.io.memPort.cmd.valid
+  io.memPort.cmd.payload := pg.io.memPort.cmd.payload
+  pg.io.memPort.rsp      := io.memPort.rsp
+
+  // the carrier is the raw generator output (complex, zeroed outside the window) — no dcOffset stage.
+  // valid AND payload are exported: `valid` is the scheduled window the decoder triggers on.
+  io.carrier << pg.io.pulse
+
+  /** per-buffer startTime, for the SoC/sim to observe the software-written schedule value. */
+  def startTime: UInt = buf.startTime
+  /** generator time→carrier latency, for the decoder/golden time-alignment derivation. */
+  def timeToPulse: Int = pg.timeToPulse
 }

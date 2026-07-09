@@ -5,9 +5,10 @@ import spinal.core._
 /**
  * RV32 'M' extension encodings (opcode `OP` = 0110011, funct7 = 0000001).
  *
- * Parallels [[Rv32i]] but holds only the optional M instructions, so an extension plugin can make
- * its own opcodes legal via `DecoderPlugin.addInstruction` without touching the base RV32I catalog.
- * Only the multiply group is listed today; DIV/REM (a future `DivPlugin`) would join here.
+ * Parallels [[Rv32i]] but holds only the optional multiply (Zmmul) instructions, so an extension
+ * plugin can make its own opcodes legal via `DecoderPlugin.addInstruction` without touching the base
+ * RV32I catalog. Only the multiply group is listed today; DIV/REM (full M, a future `DivPlugin`) would
+ * join here.
  */
 object Rv32m {
   // Multiply (R-type, funct7 = 0000001). funct3: MUL=000, MULH=001, MULHSU=010, MULHU=011.

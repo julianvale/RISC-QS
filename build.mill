@@ -26,6 +26,7 @@ object `package` extends ScalaModule {
   override def mvnDeps = Seq(
     mvn"org.scalatest::scalatest:3.2.17",
     mvn"net.fornwall:jelf:0.7.0", // jelf backs the vendored spinal.lib.misc.Elf
+    mvn"com.lihaoyi::ujson:3.3.1", // shared python<->Scala per-build SocParams JSON (GenPulseTableSocJson)
   )
 
   object test extends ScalaTests {

@@ -24,7 +24,7 @@ if {$RUN_BITSTREAM} { set RUN_IMPL 1 }
 
 # Paths. One folder per project under the repo-root build/ (git-ignored), so several designs build in
 # parallel without clobbering each other. The RTL (PulseTableSoc.v + ClockInterface.v + register-file
-# .bin) is emitted into that same folder by build-riscvsoc-bd.sh's GenPulseTableSocVivado, so SOURCE_PATH
+# .bin) is emitted into that same folder by build-riscvsoc-bd.sh's GenPulseTableSocJson, so SOURCE_PATH
 # is the build dir itself. RISCQ_PROJ_NAME names the folder; RISCQ_BUILD_DIR overrides the full path.
 set PROJ_NAME   riscvsoc-bd
 if {[info exists ::env(RISCQ_PROJ_NAME)]}     { set PROJ_NAME   $::env(RISCQ_PROJ_NAME) }

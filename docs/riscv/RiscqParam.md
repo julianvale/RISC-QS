@@ -50,7 +50,7 @@ arrives every cycle. Raising it costs the PC-carrying flop copies across the ext
 
 ## Optional ISA extensions
 
-- **`withMul`** (default **off**) — adds the M-extension multiply unit ([MulPlugin](MulPlugin.md)).
+- **`withMul`** (default **on**) — adds the Zmmul multiply-only unit ([MulPlugin](MulPlugin.md)).
   Off by default so the base config stays minimal RV32I; opt in per config or via
   `RISCQ_WITH_MUL=1` in the benches. Costs a 3-cycle bubble per multiply and is the current fmax
   binder when enabled. DIV/REM are not implemented.

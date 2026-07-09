@@ -40,9 +40,10 @@ case class RiscqParam(
     btbSets: Int = 2,
     gshareHistoryWidth: Int = 6, // GShare global-history / counter-index width (2^w counters)
     // Optional ISA extensions. Each gates a self-contained FiberPlugin; the base RV32I core is
-    // unchanged when off. `withMul` adds the M-extension multiply unit (execute.MulPlugin).
-    // Default off so the base config stays minimal RV32I — opt in per config / via RISCQ_WITH_MUL.
-    withMul: Boolean = false,
+    // unchanged when off. `withMul` adds the Zmmul multiply unit (execute.MulPlugin) — multiply only
+    // (mul/mulh/mulhsu/mulhu), no divide, so the ISA is RV32I + Zmmul, not full M.
+    // Default on; set `withMul = false` (config `with_mul: false`) for a minimal RV32I-only build.
+    withMul: Boolean = true,
     // ---- Resource-shrink flags ----
     // Each defaults on and is a bit-exact A/B with identical architectural correctness (RVLS-gated).
     //   gshareMem: store the GShare 2-bit counters in a synchronous-read `Mem` (BRAM/LUTRAM)
@@ -126,13 +127,24 @@ case class RiscqParam(
     //     (it widens wiring congestion), so it earns its keep mainly on a packed/congested floorplan.
     //     Default off. See IntAluPlugin (the result mux).
     aluResultOneHot: Boolean = false,
+    //   csrCommitMaxFanout: `MAX_FANOUT = N` on CsrPlugin's sampled CSR write qualifier (`writeEn`),
+    //     the root of the per-CSR clock-enable decode (the observed 5-level
+    //     `valid → … → mstatusMie → mtvec → mscratch/CE` chain, riscv-fmax spec §2 C1). 0 = off.
+    //     Bit-exact (attribute only). See CsrPlugin.
+    csrCommitMaxFanout: Int = 0,
+    // NOTE: several bit-exact levers are now BAKED IN — always on, no longer flags: B3 (parallel per-CSR
+    //   commit), B4 (LSU pure-data snapshot select), E1 (registered load down-shift), E2 (mispredict off
+    //   the LSU/Mul halt), E3 (pre-decoded env ops), plus the MAX_FANOUT=16 caps on the jumpAt mispredict
+    //   root (B2, BranchPlugin) and the fetch reorder-buffer control (E4, FetchPlugin), and the
+    //   MAX_FANOUT=4 cap on the drive buffer's dcOffset register (dsp-fmax B2, PulseParamBuffer). See
+    //   those plugins; the derivation is riscv-fmax.md §5 / dsp-fmax.md, byte-identical-Verilog proof in git.
     // ---- Pipeline back-pressure cuts ----
     // Each `i` replaces the plain StageLink at the ctrl(i)→ctrl(i+1) boundary with a skid buffer
     // (StageLink + CtrlLink + S2MLink): the S2MLink registers the upstream `ready` so the execute-stage
     // halt/flush stops rippling combinationally back to the fetch fork — no steady-state cost (the buffer
     // is transparent when empty). Wrong-path instructions in a skid are cancelled by
     // PipelinePlugin.throwSkidsBefore. Default = fetchData→decode (Seq(1)); empty = none.
-    skidAfter: Seq[Int] = Seq(1),
+    skidAfterOverride: Option[Seq[Int]] = None,
     // ---- Fetch-PC narrowing ----
     // Width of the architectural PC and of every carried code-address (Global.FETCH_PC_WIDTH). None ⇒ full
     // XLEN (the baseline). Some(w) carries only the low w-bit PC *offset* through the pipeline and
@@ -168,6 +180,8 @@ case class RiscqParam(
    *  decode (so the registered operand read at `regReadAt = executeAt-1 = decodeAt+1` sits between decode
    *  and execute), unless pinned via `executeAtOverride`. With the defaults this is stage 4. */
   def executeAt: Int = executeAtOverride.getOrElse(decodeAt + 2)
+
+  def skidAfter: Seq[Int] = skidAfterOverride.getOrElse(Seq(fetchLatency))
 
   // Stage ordering the rest of the core relies on; catches a `*Override` (or `fetchLatency`) that would
   // fold the back end onto/ahead of the fetched word — the exact breakage when `fetchLatency > 1` left

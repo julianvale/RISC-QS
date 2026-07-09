@@ -221,15 +221,20 @@ case class TileLinkMemReadWriteFiber[T <: Data](port: MemReadWritePort[T], withO
  *
  *  The bus word width equals the RAM word (the fiber forces it, like its sibling), so — as in the
  *  read/write path — there is no sub-word byte-lane logic; that bridging lives only in the write-only
- *  [[TileLinkMemWriteLogic]]. A simulation `assert` guards the no-back-pressure premise. */
-case class TileLinkCpuMemLogic[T <: Data](p: BusParameter, inPort: MemReadWritePort[T], withOutReg: Boolean)
+ *  [[TileLinkMemWriteLogic]]. A simulation `assert` guards the no-back-pressure premise.
+ *
+ *  `latency` is the RAM's exact accept-edge → rdata-stable-cycle read latency and MUST match the
+ *  storage: Bram = 1 + outReg (2 with the output register); Uram = pipeNum + 2 (the template chains
+ *  memreg + NBPIPE pipes + the dout register, one MORE stage than Bram+outReg at pipeNum = 1 — the
+ *  latency-2 assumption here was exactly the bug that made every host/CPU read return the previous
+ *  read's data once RiscvSoc switched to UltraRAM). */
+case class TileLinkCpuMemLogic[T <: Data](p: BusParameter, inPort: MemReadWritePort[T], latency: Int)
     extends Component {
   assert(p.beatMax == 1, "beatMax must be 1")
   val io = new Area {
     val up   = slave  port Bus(p)
     val port = master port cloneOf(inPort)
   }
-  val latency = 1 + withOutReg.toInt
   val a = io.up.a
   val d = io.up.d
   val isGet = Opcode.A.isGet(a.opcode)
@@ -260,8 +265,9 @@ case class TileLinkCpuMemLogic[T <: Data](p: BusParameter, inPort: MemReadWriteP
 
 /** Fiber wrapper for [[TileLinkCpuMemLogic]] — identical node negotiation to [[TileLinkMemReadWriteFiber]],
  *  only the slave logic is the stripped-down fixed-latency variant. Use this exclusively for the riscq
- *  CPU's instruction/data RAM, where the masters never back-pressure the d-channel. */
-case class TileLinkCpuMemFiber[T <: Data](port: MemReadWritePort[T], withOutReg: Boolean) extends Area {
+ *  CPU's instruction/data RAM, where the masters never back-pressure the d-channel. `latency` must be
+ *  the storage's exact read latency (see [[TileLinkCpuMemLogic]]). */
+case class TileLinkCpuMemFiber[T <: Data](port: MemReadWritePort[T], latency: Int) extends Area {
   val up = Node.up()
 
   val dataBytes = math.pow(2, log2Up(port.dataType.getBitsWidth / 8)).toInt
@@ -278,7 +284,7 @@ case class TileLinkCpuMemFiber[T <: Data](port: MemReadWritePort[T], withOutReg:
       .copy(addressWidth = port.addressWidth + log2Up(dataBytes), dataWidth = dataBytes * 8)
     up.s2m.none()
 
-    val logic = TileLinkCpuMemLogic(up.bus.p, port, withOutReg)
+    val logic = TileLinkCpuMemLogic(up.bus.p, port, latency)
     logic.io.port <> port
     logic.io.up << up.bus
 
