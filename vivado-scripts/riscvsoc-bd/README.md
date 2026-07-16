@@ -16,7 +16,8 @@ packages the configured one-core IP, constructs and validates the block design, 
 wrapper. It explicitly skips `generate_target`, IP/OOC run creation, synthesis, implementation,
 bitstream, and XSA export. The wrapper rejects `RISCQ_BUILD_MODE=full` for RFSoC4x2 at present.
 
-RFSoC4x2 uses PS `pl_clk0` at 100 MHz for host/control AXI and RFDC `clk_dac0` at 491.52 MHz for the
+RFSoC4x2 uses PS `pl_clk0` at nominal 100 MHz (Vivado metadata: 99,999,985 Hz) for host/control AXI and
+RFDC `clk_dac0` at 491.52 MHz for the
 RISC-Q DSP and all active/dummy RFDC AXIS interfaces. It does not generate or instantiate the ZCU216
 `ClockInterface`. Its RFDC analog and reference-clock ports are hard-IP interfaces and deliberately
 have no ordinary `PACKAGE_PIN` constraints.
@@ -24,6 +25,12 @@ have no ordinary `PACKAGE_PIN` constraints.
 Before hardware use, the board clock chips must be initialized with the standard PYNQ clock profile
 equivalent to `xrfclk.set_ref_clks(lmk_freq=245.76, lmx_freq=491.52)`. No custom LMK/LMX register table
 is part of this hardware flow.
+
+RFDC multi-tile synchronization is disabled in the proof-of-concept configuration. If deterministic
+latency or phase alignment between DAC tile 0 and DAC tile 2 is required, run a verified AMD/PYNQ MTS
+sequence after clock-chip initialization and confirm its SYSREF requirements on the board. Internal
+reference forwarding and a common `clk_dac0` PL clock do not by themselves guarantee inter-tile phase
+alignment.
 
 ## ZCU216 legacy floorplanned flow
 

@@ -12,6 +12,7 @@ switch -- $PLATFORM {
     set PART              xczu49dr-ffvf1760-2-e
     set DEFAULT_PROJ_NAME riscvsoc-bd
     set DEFAULT_DSP_FREQ  500000000
+    set DEFAULT_HOST_FREQ 100000000
     set RFDC_CONFIG_SCRIPT  rfdc-config.tcl
     set RFDC_CONNECT_SCRIPT rfdc-connect.tcl
     set USE_CLOCK_INTERFACE 1
@@ -23,6 +24,9 @@ switch -- $PLATFORM {
     set BOARD_PART        realdigital.org:rfsoc4x2:part0:1.0
     set DEFAULT_PROJ_NAME rfsoc4x2-nv
     set DEFAULT_DSP_FREQ  491520000
+    # The PS customization reports 99,999,985 Hz for its nominal 100 MHz PL0 clock. Use that exact
+    # value in packaged/BD metadata so a physically common clock is not diagnosed as asynchronous.
+    set DEFAULT_HOST_FREQ 99999985
     set RFDC_CONFIG_SCRIPT  rfdc-config-rfsoc4x2.tcl
     set RFDC_CONNECT_SCRIPT rfdc-connect-rfsoc4x2.tcl
     set USE_CLOCK_INTERFACE 0
@@ -37,7 +41,7 @@ switch -- $PLATFORM {
 set TOP_MODULE    PulseTableSoc
 set BD_NAME       riscq_bd
 set DSP_FREQ      $DEFAULT_DSP_FREQ
-set HOST_FREQ     100000000
+set HOST_FREQ     $DEFAULT_HOST_FREQ
 
 # Run stages. The legacy ZCU216 profile retains synthesis-on behavior. RFSoC4x2 defaults to a safe
 # validation-only profile: no target generation, IP/OOC run creation, synthesis, implementation, or XSA.
@@ -61,8 +65,8 @@ if {[info exists ::env(RISCQ_RUN_BITSTREAM)]} { set RUN_BITSTREAM $::env(RISCQ_R
 
 # The RFDC profile, generated RTL metadata, and runtime PYNQ clock setup are one fixed timing contract.
 if {$PLATFORM eq "rfsoc4x2"} {
-  if {$DSP_FREQ != 491520000 || $HOST_FREQ != 100000000} {
-    error "RFSoC4x2 requires RISCQ_DSP_FREQ=491520000 and RISCQ_HOST_FREQ=100000000"
+  if {$DSP_FREQ != 491520000 || $HOST_FREQ != 99999985} {
+    error "RFSoC4x2 requires RISCQ_DSP_FREQ=491520000 and nominal-100MHz RISCQ_HOST_FREQ=99999985"
   }
   if {!$VALIDATE_ONLY} {
     error "RFSoC4x2 full builds are disabled; set RISCQ_VALIDATE_ONLY=1"

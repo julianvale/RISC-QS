@@ -88,7 +88,7 @@ mkdir -p "$BUILD"
 # 1) RTL — the BD (vivado=true) form — emitted INTO the project build dir from the SocParams JSON.
 if [ "${RISCQ_SKIP_GEN:-0}" != "1" ]; then
   echo "[riscvsoc-bd] generating BD RTL (GenPulseTableSocJson $CONFIG, vivado=true) → $BUILD"
-  ( cd "$REPO_DIR" && mill runMain riscq.soc.GenPulseTableSocJson "$CONFIG" "$BUILD" vivado "$PLATFORM" )
+  ( cd "$REPO_DIR" && mill --no-server runMain riscq.soc.GenPulseTableSocJson "$CONFIG" "$BUILD" vivado "$PLATFORM" )
 else
   echo "[riscvsoc-bd] RISCQ_SKIP_GEN=1 — reusing RTL in $BUILD"
   [ -f "$BUILD/PulseTableSoc.v" ] || { echo "[riscvsoc-bd] no $BUILD/PulseTableSoc.v — run once without RISCQ_SKIP_GEN" >&2; exit 1; }
@@ -125,13 +125,14 @@ echo "[riscvsoc-bd] ============================================================
 echo "[riscvsoc-bd] done. reports in $BUILD"
 if [ "$BUILD_MODE" = "validation" ]; then
   echo "[riscvsoc-bd] validation-only flow complete; no build runs were requested"
-fi
-if [ -f "$BUILD/timing_impl.rpt" ]; then
-  echo "[riscvsoc-bd] impl WNS/TNS (timing_impl.rpt):"
-  grep -m2 -E "WNS|TNS|Worst Negative|Total Negative" "$BUILD/timing_impl.rpt" | sed 's/^/[riscvsoc-bd]   /' || true
 else
-  echo "[riscvsoc-bd] (no timing_impl.rpt — see $BUILD/vivado.log)"
+  if [ -f "$BUILD/timing_impl.rpt" ]; then
+    echo "[riscvsoc-bd] impl WNS/TNS (timing_impl.rpt):"
+    grep -m2 -E "WNS|TNS|Worst Negative|Total Negative" "$BUILD/timing_impl.rpt" | sed 's/^/[riscvsoc-bd]   /' || true
+  else
+    echo "[riscvsoc-bd] (no timing_impl.rpt — see $BUILD/vivado.log)"
+  fi
+  [ -f "$BUILD/PulseTableSoc.bit" ] && echo "[riscvsoc-bd] bitstream: $BUILD/PulseTableSoc.bit"
+  [ -f "$BUILD/PulseTableSoc.xsa" ] && echo "[riscvsoc-bd] hardware platform: $BUILD/PulseTableSoc.xsa"
+  echo "[riscvsoc-bd] compare against ../riscvsoc (OOC, ~ −0.156 ns). util_impl.rpt holds the per-pblock view."
 fi
-[ -f "$BUILD/PulseTableSoc.bit" ] && echo "[riscvsoc-bd] bitstream: $BUILD/PulseTableSoc.bit"
-[ -f "$BUILD/PulseTableSoc.xsa" ] && echo "[riscvsoc-bd] hardware platform: $BUILD/PulseTableSoc.xsa"
-echo "[riscvsoc-bd] compare against ../riscvsoc (OOC, ~ −0.156 ns). util_impl.rpt holds the per-pblock view."

@@ -27,6 +27,13 @@ apply_bd_automation -rule xilinx.com:bd_rule:zynq_ultra_ps_e -config {apply_boar
 if {$PLATFORM eq "rfsoc4x2"} {
   # The board preset enables PL0; make the requested control-domain rate explicit and reproducible.
   set_property -dict [list \
+    CONFIG.PSU__USE__M_AXI_GP0 {0} \
+    CONFIG.PSU__USE__M_AXI_GP1 {0} \
+    CONFIG.PSU__USE__M_AXI_GP2 {1} \
+    CONFIG.PSU__USE__S_AXI_GP0 {0} \
+    CONFIG.PSU__USE__S_AXI_GP1 {0} \
+    CONFIG.PSU__USE__S_AXI_GP2 {0} \
+    CONFIG.PSU__USE__IRQ0 {0} \
     CONFIG.PSU__FPGA_PL0_ENABLE {1} \
     CONFIG.PSU__USE__FABRIC__RST {1} \
     CONFIG.PSU__NUM_FABRIC_RESETS {1} \
