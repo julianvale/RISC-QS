@@ -46,7 +46,7 @@ case class RiscqRFSoC4x2SocPorts(
  */
 abstract class RFSoC4x2Top(
     dacNum: Int = 2, adcNum: Int = 4, dacBatch: Int = 16, adcBatch: Int = 4, dataWidth: Int = 16,
-    vivado: Boolean = false
+    vivado: Boolean = false, dspFreqHz: Long = 500000000L
 ) extends Component {
   val io = RiscqRFSoC4x2SocPorts(dacNum, adcNum, dacBatch, adcBatch, dataWidth, vivado)
 
@@ -61,6 +61,6 @@ abstract class RFSoC4x2Top(
   if (vivado) {
     hostCd.renamePulledWires("hostClk", "hostRst")
     VivadoClkHelper.addInference(hostCd.readClockWire, hostCd.readResetWire, 100000000L)
-    VivadoClkHelper.addInference(dspCd.readClockWire, io.dspRst, 500000000L)
+    VivadoClkHelper.addInference(dspCd.readClockWire, io.dspRst, dspFreqHz)
   }
 }

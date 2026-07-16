@@ -35,6 +35,6 @@ connect_bd_net [get_bd_pins dsp_rst/peripheral_aresetn] {*}$axis_aresets
 
 # s_axi control port lives in the PS pl_clk0 domain
 connect_bd_net [get_bd_pins zynq_ps/pl_clk0]    [get_bd_pins rf_data_converter/s_axi_aclk]
-connect_bd_net [get_bd_pins zynq_ps/pl_resetn0] [get_bd_pins rf_data_converter/s_axi_aresetn]
+connect_bd_net [get_bd_pins ps_rst/peripheral_aresetn] [get_bd_pins rf_data_converter/s_axi_aresetn]
 connect_bd_net [get_bd_pins $CLKIFC/user_sysref] \
   [get_bd_pins rf_data_converter/user_sysref_adc] [get_bd_pins rf_data_converter/user_sysref_dac]

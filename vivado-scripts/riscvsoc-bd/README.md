@@ -1,4 +1,31 @@
-# `riscvsoc-bd/` — block-design implementation of the floorplan
+# `riscvsoc-bd/` — ZCU216 and RFSoC 4x2 block-design flow
+
+The flow is platform-selectable. `zcu216` remains the legacy floorplanned implementation flow;
+`rfsoc4x2` is the Real Digital RFSoC 4x2 NV proof-of-concept and defaults to a validation-only flow.
+
+## RFSoC 4x2 validation
+
+```bash
+RISCQ_PLATFORM=rfsoc4x2 \
+RISCQ_BOARD_REPO=/path/to/vivado_boards \
+./build-riscvsoc-bd.sh
+```
+
+The board repository is the directory containing `rfsoc4x2/1.0/board.xml`. RFSoC4x2 validation
+packages the configured one-core IP, constructs and validates the block design, and creates the HDL
+wrapper. It explicitly skips `generate_target`, IP/OOC run creation, synthesis, implementation,
+bitstream, and XSA export. The wrapper rejects `RISCQ_BUILD_MODE=full` for RFSoC4x2 at present.
+
+RFSoC4x2 uses PS `pl_clk0` at 100 MHz for host/control AXI and RFDC `clk_dac0` at 491.52 MHz for the
+RISC-Q DSP and all active/dummy RFDC AXIS interfaces. It does not generate or instantiate the ZCU216
+`ClockInterface`. Its RFDC analog and reference-clock ports are hard-IP interfaces and deliberately
+have no ordinary `PACKAGE_PIN` constraints.
+
+Before hardware use, the board clock chips must be initialized with the standard PYNQ clock profile
+equivalent to `xrfclk.set_ref_clks(lmk_freq=245.76, lmx_freq=491.52)`. No custom LMK/LMX register table
+is part of this hardware flow.
+
+## ZCU216 legacy floorplanned flow
 
 This is the **block-design counterpart** of the out-of-context bench in [`../riscvsoc`](../riscvsoc).
 Same SoC (`PulseTableSoc`, 14 cores), same **floorplan** (cores → X0 Y3–Y7 bands 3/row, datapath →

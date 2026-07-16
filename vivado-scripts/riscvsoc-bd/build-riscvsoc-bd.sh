@@ -21,9 +21,9 @@
 # The qubit count / DAC-ADC maps / interpolation all come from the JSON config; the tcl flow discovers the
 # core count from the netlist, so a different config just needs a matching floorplan (pblocks-bd.tcl).
 #
-# By default this runs the full flow — synth + impl + write_bitstream + XSA export — so it drops both a
-# PulseTableSoc.bit and a PulseTableSoc.xsa (the fixed hardware handoff for the Vitis / PetaLinux software
-# flow, bitstream embedded) in the build dir. Set RISCQ_RUN_BITSTREAM=0 to stop after implementation.
+# ZCU216 retains the legacy full-build default. RFSoC4x2 defaults to validation-only: package the IP,
+# construct and validate the BD, create its HDL wrapper, and stop without generate_target, OOC run
+# creation, synthesis, implementation, bitstream, or XSA export.
 #
 # Usage:
 #   ./build-riscvsoc-bd.sh                    # zcu216-14q config, full floorplan, synth+impl+bitstream+xsa
@@ -31,9 +31,11 @@
 #   RISCQ_CONFIG=software/configs/sim-2q.json ./build-riscvsoc-bd.sh # a different SocParams JSON
 #   RISCQ_SKIP_GEN=1   ./build-riscvsoc-bd.sh # reuse the RTL already in the build dir (skip mill)
 #   RISCQ_PROJ_NAME=foo ./build-riscvsoc-bd.sh # build into <repo>/build/foo (parallel designs)
+#   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BOARD_REPO=/path/to/boards ./build-riscvsoc-bd.sh # validation only
 #
 # Env: RISCQ_VIVADO_BIN, RISCQ_CONFIG (default software/configs/zcu216-14q.json), RISCQ_SKIP_GEN,
-#   RISCQ_RUN_BITSTREAM (default 1 — bitstream + xsa; set 0 for impl-only),
+#   RISCQ_BUILD_MODE (validation|full; defaults validation on RFSoC4x2 and full on ZCU216),
+#   RISCQ_RUN_BITSTREAM (legacy ZCU216 full mode: default 1; set 0 for impl-only),
 #   RISCQ_PROJ_NAME (default riscvsoc-bd), plus the floorplan knobs read by pblocks-bd.tcl:
 #   RISCQ_{ROW,PERROW,CONFINE}, RISCQ_BD_BASE, and RISCQ_PLACE_DIRECTIVE (default ExtraNetDelay_high —
 #   the placer directive). RISCQ_MREG_LOCK=1 freezes the carrierGen ComplexMul product DSPs against
@@ -43,15 +45,50 @@ set -e
 BD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # vivado-scripts/riscvsoc-bd
 REPO_DIR="$(cd "$BD_DIR/../.." && pwd)"                  # agentic-rv-dev (repo root)
 VIVADO_BIN="${RISCQ_VIVADO_BIN:-$(dirname "$(command -v vivado)")}"
-CONFIG="${RISCQ_CONFIG:-$REPO_DIR/software/configs/zcu216-14q.json}"
-PROJ="${RISCQ_PROJ_NAME:-riscvsoc-bd}"
+PLATFORM="${RISCQ_PLATFORM:-zcu216}"
+case "$PLATFORM" in
+  zcu216)
+    DEFAULT_CONFIG="$REPO_DIR/software/configs/zcu216-14q.json"
+    DEFAULT_PROJ="riscvsoc-bd"
+    ;;
+  rfsoc4x2)
+    DEFAULT_CONFIG="$REPO_DIR/software/configs/rfsoc4x2-nv-1q.json"
+    DEFAULT_PROJ="rfsoc4x2-nv"
+    ;;
+  *)
+    echo "[riscvsoc-bd] unsupported RISCQ_PLATFORM '$PLATFORM' (expected zcu216 or rfsoc4x2)" >&2
+    exit 2
+    ;;
+esac
+if [ -n "${RISCQ_BUILD_MODE:-}" ]; then
+  BUILD_MODE="$RISCQ_BUILD_MODE"
+elif [ "$PLATFORM" = "rfsoc4x2" ]; then
+  BUILD_MODE="validation"
+else
+  BUILD_MODE="full"
+fi
+case "$BUILD_MODE" in
+  validation) ;;
+  full)
+    if [ "$PLATFORM" = "rfsoc4x2" ]; then
+      echo "[riscvsoc-bd] RFSoC4x2 full builds are disabled; use RISCQ_BUILD_MODE=validation" >&2
+      exit 2
+    fi
+    ;;
+  *)
+    echo "[riscvsoc-bd] unsupported RISCQ_BUILD_MODE '$BUILD_MODE' (expected validation or full)" >&2
+    exit 2
+    ;;
+esac
+CONFIG="${RISCQ_CONFIG:-$DEFAULT_CONFIG}"
+PROJ="${RISCQ_PROJ_NAME:-$DEFAULT_PROJ}"
 BUILD="$REPO_DIR/build/$PROJ"
 mkdir -p "$BUILD"
 
 # 1) RTL — the BD (vivado=true) form — emitted INTO the project build dir from the SocParams JSON.
 if [ "${RISCQ_SKIP_GEN:-0}" != "1" ]; then
   echo "[riscvsoc-bd] generating BD RTL (GenPulseTableSocJson $CONFIG, vivado=true) → $BUILD"
-  ( cd "$REPO_DIR" && mill runMain riscq.soc.GenPulseTableSocJson "$CONFIG" "$BUILD" vivado )
+  ( cd "$REPO_DIR" && mill runMain riscq.soc.GenPulseTableSocJson "$CONFIG" "$BUILD" vivado "$PLATFORM" )
 else
   echo "[riscvsoc-bd] RISCQ_SKIP_GEN=1 — reusing RTL in $BUILD"
   [ -f "$BUILD/PulseTableSoc.v" ] || { echo "[riscvsoc-bd] no $BUILD/PulseTableSoc.v — run once without RISCQ_SKIP_GEN" >&2; exit 1; }
@@ -61,18 +98,34 @@ fi
 #    just enables the pre-place hook (any value); RISCQ_PBLOCK_TCL is the actual floorplan file.
 export RISCQ_PROJ_NAME="$PROJ"
 export RISCQ_BUILD_DIR="$BUILD"
-export RISCQ_PBLOCK=1
-export RISCQ_PBLOCK_TCL="$BD_DIR/pblocks-bd.tcl"
-export RISCQ_IP_RETIMING=1
-export RISCQ_PLACE_DIRECTIVE="${RISCQ_PLACE_DIRECTIVE:-ExtraNetDelay_high}"   # route stays AggressiveExplore (run.tcl)
-export RISCQ_RUN_IMPL=1
-export RISCQ_RUN_BITSTREAM="${RISCQ_RUN_BITSTREAM:-1}"   # bitstream + XSA (hardware handoff) by default; set 0 for impl-only
-
-echo "[riscvsoc-bd] building block design in $BUILD (floorplan, IP retiming, place=$RISCQ_PLACE_DIRECTIVE / route=AggressiveExplore, bitstream+xsa=$RISCQ_RUN_BITSTREAM) …"
+export RISCQ_PLATFORM="$PLATFORM"
+if [ "$BUILD_MODE" = "validation" ]; then
+  export RISCQ_VALIDATE_ONLY=1
+  export RISCQ_GENERATE_TARGETS=0
+  export RISCQ_RUN_SYNTH=0
+  export RISCQ_RUN_IMPL=0
+  export RISCQ_RUN_BITSTREAM=0
+  unset RISCQ_PBLOCK RISCQ_PBLOCK_TCL RISCQ_IP_RETIMING RISCQ_CSET_THRESH RISCQ_PLACE_DIRECTIVE
+  echo "[riscvsoc-bd] validating block design in $BUILD (no targets, runs, synthesis, implementation, bitstream, or XSA) …"
+else
+  export RISCQ_VALIDATE_ONLY=0
+  export RISCQ_GENERATE_TARGETS=1
+  export RISCQ_PBLOCK=1
+  export RISCQ_PBLOCK_TCL="$BD_DIR/pblocks-bd.tcl"
+  export RISCQ_IP_RETIMING=1
+  export RISCQ_PLACE_DIRECTIVE="${RISCQ_PLACE_DIRECTIVE:-ExtraNetDelay_high}"
+  export RISCQ_RUN_SYNTH=1
+  export RISCQ_RUN_IMPL=1
+  export RISCQ_RUN_BITSTREAM="${RISCQ_RUN_BITSTREAM:-1}"
+  echo "[riscvsoc-bd] building block design in $BUILD (floorplan, IP retiming, place=$RISCQ_PLACE_DIRECTIVE / route=AggressiveExplore, bitstream+xsa=$RISCQ_RUN_BITSTREAM) …"
+fi
 "$VIVADO_BIN/vivado" -nojournal -mode batch -log "$BUILD/vivado.log" -source "$BD_DIR/flow-bd.tcl"
 
 echo "[riscvsoc-bd] ===================================================================="
 echo "[riscvsoc-bd] done. reports in $BUILD"
+if [ "$BUILD_MODE" = "validation" ]; then
+  echo "[riscvsoc-bd] validation-only flow complete; no build runs were requested"
+fi
 if [ -f "$BUILD/timing_impl.rpt" ]; then
   echo "[riscvsoc-bd] impl WNS/TNS (timing_impl.rpt):"
   grep -m2 -E "WNS|TNS|Worst Negative|Total Negative" "$BUILD/timing_impl.rpt" | sed 's/^/[riscvsoc-bd]   /' || true

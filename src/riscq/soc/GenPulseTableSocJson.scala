@@ -10,20 +10,27 @@ import riscq.riscv.RiscqParam
  *
  * Defaults to the plain-port (`vivado = false`) form the co-sim / OOC flows use. Pass `vivado` as a third
  * arg for the IP-packager / block-design form (the old `GenPulseTableSocVivado`): the
- * `X_INTERFACE_INFO`/`FREQ_HZ` attrs, the `hostClk`/`hostRst` rename, `LutInputs = 6`, plus the companion
- * `ClockInterface.v` clock-buffer wrapper.
+ * `X_INTERFACE_INFO`/`FREQ_HZ` attrs, the `hostClk`/`hostRst` rename, and `LutInputs = 6`. An optional
+ * fourth platform arg defaults to `zcu216`; only that legacy platform emits the companion
+ * `ClockInterface.v` external-clock wrapper.
  *
  *   mill runMain riscq.soc.GenPulseTableSocJson software/configs/sim-2q.json software/build/sim-2q/rtl
- *   mill runMain riscq.soc.GenPulseTableSocJson software/configs/zcu216-14q.json build/rtl vivado
+ *   mill runMain riscq.soc.GenPulseTableSocJson software/configs/zcu216-14q.json build/rtl vivado zcu216
+ *   mill runMain riscq.soc.GenPulseTableSocJson software/configs/rfsoc4x2-nv-1q.json build/rtl vivado rfsoc4x2
  */
 object GenPulseTableSocJson extends App {
-  require(args.length == 2 || args.length == 3,
-    "usage: GenPulseTableSocJson <config.json> <targetDir> [vivado]")
+  require(args.length >= 2 && args.length <= 4,
+    "usage: GenPulseTableSocJson <config.json> <targetDir> [vivado [zcu216|rfsoc4x2]]")
   val cfg = ujson.read(scala.io.Source.fromFile(args(0)).mkString)
   val dir = args(1)
   val vivadoMode = args.lift(2).contains("vivado")
+  val platform = args.lift(3).getOrElse("zcu216")
+  require(!vivadoMode || Set("zcu216", "rfsoc4x2").contains(platform),
+    s"unsupported Vivado platform '$platform' (expected zcu216 or rfsoc4x2)")
+  require(args.length < 4 || vivadoMode, "a platform argument requires vivado mode")
 
   def int(key: String): Int = cfg(key).num.toInt
+  def long(key: String): Long = cfg(key).num.toLong
   def intOr(key: String, default: Int): Int = cfg.obj.get(key).map(_.num.toInt).getOrElse(default)
   def boolOr(key: String, default: Boolean): Boolean = cfg.obj.get(key).map(_.bool).getOrElse(default)
 
@@ -62,6 +69,7 @@ object GenPulseTableSocJson extends App {
     adcMap        = adcMap,
     dacNum        = int("dac_num"),
     adcNum        = int("adc_num"),
+    dspFreqHz     = long("dsp_freq_hz"),
     readoutInterp = int("readout_interp"),
     gateInterp    = int("gate_interp"),
     demodInterp   = intOr("demod_interp", 4),
@@ -84,13 +92,15 @@ object GenPulseTableSocJson extends App {
     adcPipe           = intOr("adc_pipe", 3),
     vivado        = vivadoMode)
 
-  // vivado mode: LUT6 packing + the companion ClockInterface.v BUFG wrapper, matching GenPulseTableSocVivado.
+  // Vivado mode uses LUT6 packing. The external-clock wrapper belongs only to the ZCU216 board path;
+  // RFSoC4x2 receives hostClk from PS pl_clk0 and dspClk from RFDC clk_dac0 inside the block design.
   val spinal = SpinalConfig(mode = Verilog, targetDirectory = dir, romReuse = true)
   val emit   = if (vivadoMode) spinal.setScopeProperty(LutInputs, 6) else spinal
   emit.generate(buildSoc())
-  if (vivadoMode) emit.generate(riscq.misc.ClockInterface())
+  val emitClockInterface = vivadoMode && platform == "zcu216"
+  if (emitClockInterface) emit.generate(riscq.misc.ClockInterface())
 
-  val extra = if (vivadoMode) " + ClockInterface.v" else ""
+  val extra = if (emitClockInterface) " + ClockInterface.v" else ""
   println(s"[GenPulseTableSocJson] emitted $dir/PulseTableSoc.v$extra " +
-    s"(${cfg("name").str}, qubitNum=$qubitNum, vivado=$vivadoMode)")
+    s"(${cfg("name").str}, qubitNum=$qubitNum, vivado=$vivadoMode, platform=$platform)")
 }

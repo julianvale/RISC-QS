@@ -40,6 +40,7 @@ case class PulseTableSoc(
     adcNum: Int = 16,
     withTest: Boolean = false,
     vivado: Boolean = false,
+    dspFreqHz: Long = 500000000L,
     // RISC-V core plugin config, replicated across all `qubitNum` cores. Defaults to the verified
     // timing-closure stack for the packed multi-core floorplan, every flag RVLS-bit-exact:
     //   - `gshareMem` moves the GShare 2-bit counter table from a flip-flop array + one-hot write decode
@@ -76,7 +77,8 @@ case class PulseTableSoc(
     // RAM and the B2 dcOffset MAX_FANOUT cap are baked into PulseParamBuffer; the B3 queue lean-pop into
     // TimedQueue; the C1 registered head is a TimedQueue-level option, no longer plumbed here).
     adcPipe: Int = 3,                   // C2: register stages on the ADC nets off the RFDC edge
-) extends RFSoC4x2Top(dacNum = dacNum, adcNum = adcNum, dacBatch = 16, adcBatch = 4, dataWidth = 16, vivado = vivado) {
+) extends RFSoC4x2Top(dacNum = dacNum, adcNum = adcNum, dacBatch = 16, adcBatch = 4, dataWidth = 16,
+  vivado = vivado, dspFreqHz = dspFreqHz) {
   val N        = 16    // DAC drive batch
   val adcBatch = 4
   val w        = 16
@@ -307,16 +309,24 @@ case class PulseTableSoc(
  * `0..qubitNum-1`; its readout-drive channel and its ADC share converter 14 (qubits 0–6) or 15 (7+).
  */
 object SocChannelMap {
-  // RFSoC 4x2 mapping for 1-core NV-center experiment
-  def gateConverter(core: Int): Int = 0          // Core's gate channel (ch 0) -> physical DAC 0 (Microwave)
-  def readoutDriverConverter(core: Int): Int = 1 // Core's readout channel (ch 1) -> physical DAC 1 (AOM 80MHz)
-  def readoutConverter(core: Int): Int = 0       // Core's decoder -> physical ADC 0 (APD baseband)
+  def readoutDriverConverter(core: Int): Int = if (core < 7) 14 else 15
+  def readoutConverter(core: Int): Int = if (core < 7) 0 else 4
+  def gateConverter(core: Int): Int = core
 
   def dacMap(qubitNum: Int): Map[(Int, Int), Int] =
     (0 until qubitNum).flatMap(c => List((c, 0) -> gateConverter(c), (c, 1) -> readoutDriverConverter(c))).toMap
 
   def adcMap(qubitNum: Int): Map[Int, Int] =
     (0 until qubitNum).map(c => c -> readoutConverter(c)).toMap
+}
+
+/** Logical converter numbering for the one-core RFSoC 4x2 NV proof of concept. */
+object RFSoC4x2ChannelMap {
+  def dacMap(qubitNum: Int): Map[(Int, Int), Int] =
+    (0 until qubitNum).flatMap(c => List((c, 0) -> 0, (c, 1) -> 1)).toMap
+
+  def adcMap(qubitNum: Int): Map[Int, Int] =
+    (0 until qubitNum).map(c => c -> 0).toMap
 }
 
 /**
@@ -334,8 +344,8 @@ object GenPulseTableSocVivado extends App {
   
   cfg.generate(PulseTableSoc(
     qubitNum = qubitNum,
-    dacMap   = SocChannelMap.dacMap(qubitNum),
-    adcMap   = SocChannelMap.adcMap(qubitNum),
+    dacMap   = RFSoC4x2ChannelMap.dacMap(qubitNum),
+    adcMap   = RFSoC4x2ChannelMap.adcMap(qubitNum),
     dacNum   = 2,
     adcNum   = 4,   
     vivado   = true))

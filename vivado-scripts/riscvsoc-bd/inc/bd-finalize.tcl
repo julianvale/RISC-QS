@@ -2,12 +2,19 @@
 validate_bd_design
 
 make_wrapper -files [get_files $BD_NAME.bd] -top -import -force
-generate_target all [get_files $BD_NAME.bd]
+if {$GENERATE_TARGETS} {
+  generate_target all [get_files $BD_NAME.bd]
+} else {
+  puts "\[bd-finalize\] validation-only: skipped generate_target"
+}
 close_bd_design $BD_NAME
 
 set_property top ${BD_NAME}_wrapper [current_fileset]
 
-if {[file exists $SCRIPT_DIR/constraints-zcu216.xdc]} {
-  add_files -fileset constrs_1 -norecurse $SCRIPT_DIR/constraints-zcu216.xdc
+set _constraints $SCRIPT_DIR/$CONSTRAINTS_FILE
+if {![file exists $_constraints]} {
+  error "platform constraints file not found: $_constraints"
 }
+add_files -fileset constrs_1 -norecurse $_constraints
+puts "\[bd-finalize\] constraints=$_constraints"
 update_compile_order -fileset sources_1
