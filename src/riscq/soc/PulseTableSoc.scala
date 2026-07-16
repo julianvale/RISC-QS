@@ -76,7 +76,7 @@ case class PulseTableSoc(
     // RAM and the B2 dcOffset MAX_FANOUT cap are baked into PulseParamBuffer; the B3 queue lean-pop into
     // TimedQueue; the C1 registered head is a TimedQueue-level option, no longer plumbed here).
     adcPipe: Int = 3,                   // C2: register stages on the ADC nets off the RFDC edge
-) extends Zcu216Top(dacNum = dacNum, adcNum = adcNum, dacBatch = 16, adcBatch = 4, dataWidth = 16, vivado = vivado) {
+) extends RFSoC4x2Top(dacNum = dacNum, adcNum = adcNum, dacBatch = 16, adcBatch = 4, dataWidth = 16, vivado = vivado) {
   val N        = 16    // DAC drive batch
   val adcBatch = 4
   val w        = 16
@@ -307,11 +307,14 @@ case class PulseTableSoc(
  * `0..qubitNum-1`; its readout-drive channel and its ADC share converter 14 (qubits 0–6) or 15 (7+).
  */
 object SocChannelMap {
-  def readoutDriverConverter(core: Int): Int = if (core < 7) 14 else 15
-  def readoutConverter(core: Int): Int = if (core < 7) 0 else 4
-  def gateConverter(core: Int): Int = core
+  // RFSoC 4x2 mapping for 1-core NV-center experiment
+  def gateConverter(core: Int): Int = 0          // Core's gate channel (ch 0) -> physical DAC 0 (Microwave)
+  def readoutDriverConverter(core: Int): Int = 1 // Core's readout channel (ch 1) -> physical DAC 1 (AOM 80MHz)
+  def readoutConverter(core: Int): Int = 0       // Core's decoder -> physical ADC 0 (APD baseband)
+
   def dacMap(qubitNum: Int): Map[(Int, Int), Int] =
     (0 until qubitNum).flatMap(c => List((c, 0) -> gateConverter(c), (c, 1) -> readoutDriverConverter(c))).toMap
+
   def adcMap(qubitNum: Int): Map[Int, Int] =
     (0 until qubitNum).map(c => c -> readoutConverter(c)).toMap
 }
@@ -324,21 +327,19 @@ object SocChannelMap {
  * register-file ROM init across the identical cores.
  */
 object GenPulseTableSocVivado extends App {
-  // args: `[N]` qubit count (default 14) and `[dir]` target directory (the first non-numeric arg;
-  // default `./build/rtl`), so the `.v` + `ClockInterface.v` + register-file `.bin` land in the
-  // per-project build dir the Vivado flow runs from.
-  // Builds the narrow posted-link RF architecture — pair with the per-core / two-region floorplan.
-  // PulseTableSoc tags each core's `RiscvSoc` `(* KEEP_HIERARCHY = "TRUE" *)` so synthesis can't
-  // dissolve or cross-merge the identical cores; the per-core pblocks pin each core's `RiscvSoc`, so
-  // that boundary must remain a distinct macro for the floorplan to bind.
-  val qubitNum = args.filter(_.forall(_.isDigit)).headOption.map(_.toInt).getOrElse(14)
+  // Change default qubitNum to 1 for your NV-center setup
+  val qubitNum = args.filter(_.forall(_.isDigit)).headOption.map(_.toInt).getOrElse(1)
   val dir      = args.find(a => a.nonEmpty && !a.forall(_.isDigit)).getOrElse("./build/rtl")
   val cfg      = SpinalConfig(mode = Verilog, targetDirectory = dir, romReuse = true).setScopeProperty(LutInputs, 6)
+  
   cfg.generate(PulseTableSoc(
     qubitNum = qubitNum,
     dacMap   = SocChannelMap.dacMap(qubitNum),
     adcMap   = SocChannelMap.adcMap(qubitNum),
+    dacNum   = 2,
+    adcNum   = 4,   
     vivado   = true))
+    
   cfg.generate(riscq.misc.ClockInterface())
   println(s"[GenPulseTableSocVivado] emitted $dir/PulseTableSoc.v + ClockInterface.v (qubitNum=$qubitNum, vivado=true)")
 }

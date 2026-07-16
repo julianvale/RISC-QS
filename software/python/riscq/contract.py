@@ -84,7 +84,7 @@ class Contract:
     region_size (hence the region bases) scales with qubit_num — so a 2-qubit sim build lays the
     regions out differently from the 14-qubit default, which is why nothing here is hard-coded.
     """
-    qubit_num: int = 14
+    qubit_num: int = 1
     batch_size: int = 16        # N — DAC drive samples per batch tick
     adc_batch: int = 4          # ADC demod lanes per batch tick (≠ batch_size)
     data_width: int = 16        # w

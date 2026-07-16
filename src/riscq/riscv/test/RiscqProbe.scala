@@ -52,7 +52,7 @@ class RiscqProbe(dut: Riscq, p: RiscqParam, hartId: Int = 0, kb: Option[konata.B
     // ISA string for Spike must match the enabled extensions, else it decodes them as illegal.
     // The core is multiply-only (no divide), so the extension is Zmmul, not full M.
     val isa = s"RV${p.xlen}I" + (if (p.withMul) "_Zmmul" else "")
-    b.newCpu(hartId, isa, "M", p.xlen, 0, hartId)
+    b.newCpu(hartId, isa, "M", p.xlen, 0)
     // RVLS/Spike treats every address as MMIO and faults on any fetch/load/store outside a
     // declared region. riscq has a single flat RAM (the testbench's SparseMemory image), so
     // announce the whole XLEN space as one main-memory region (kind 0 = RAM).
@@ -104,9 +104,7 @@ class RiscqProbe(dut: Riscq, p: RiscqParam, hartId: Int = 0, kb: Option[konata.B
         val isStore  = lsu.dbgIsStore.toBoolean
         if (memValid) {
           val a = lsu.dbgAddr.toBigInt.toLong; val len = lsu.dbgSize.toLong; val d = lsu.dbgData.toBigInt.toLong
-          if (isStore) backends.foreach(_.storeExecute(hartId, 0, a, len, d))
-          else         backends.foreach(_.loadExecute(hartId, 0, a, len, d))
-          if (isStore) backends.foreach(_.storeCommit(hartId, 0))
+          if (isStore) backends.foreach(_.storeCommit(hartId, 0, a, len, d))
           else         backends.foreach(_.loadCommit(hartId, 0))
         }
         // Integer rd write-back.
@@ -117,7 +115,7 @@ class RiscqProbe(dut: Riscq, p: RiscqParam, hartId: Int = 0, kb: Option[konata.B
           backends.foreach(_.readRf(hartId, 4, ca, csr.dbgCsrRdata.toBigInt.toLong))
           if (csr.dbgCsrWrite.toBoolean) backends.foreach(_.writeRf(hartId, 4, ca, csr.dbgCsrWdata.toBigInt.toLong))
         }
-        backends.foreach(_.commit(hartId, pc, instr))
+        backends.foreach(_.commit(hartId, pc))
         if (memValid && isStore) backends.foreach(_.storeBroadcast(hartId, 0))
         emitKonata(done, cycle, committed = true)
         commitsCallbacks.foreach(_(hartId, pc))
