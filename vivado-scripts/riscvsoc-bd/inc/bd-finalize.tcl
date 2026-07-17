@@ -16,5 +16,10 @@ if {![file exists $_constraints]} {
   error "platform constraints file not found: $_constraints"
 }
 add_files -fileset constrs_1 -norecurse $_constraints
+if {$PLATFORM eq "rfsoc4x2"} {
+  # The PS/RFDC generated clocks do not exist while synth_1 first parses project XDC. Apply this XDC
+  # after the synthesized netlists are linked for Phase 5A reporting, and normally during implementation.
+  set_property USED_IN_SYNTHESIS false [get_files $_constraints]
+}
 puts "\[bd-finalize\] constraints=$_constraints"
 update_compile_order -fileset sources_1

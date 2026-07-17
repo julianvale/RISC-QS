@@ -20,6 +20,34 @@ if {$RUN_SYNTH} {
   # cores (the OOC bench's `synth_design -retiming`), so a block-design impl is a fair compare to the
   # out-of-context vivado-scripts/riscvsoc bench — the synth_1 GLOBAL_RETIMING above only touches the
   # ≈FF-free BD wrapper, never the cores. Both levers reuse the one create_ip_run materialisation.
+  # RFSoC4x2 Phase 5A explicitly materializes and runs every required BD OOC synthesis run before
+  # top-level synthesis. This also gives us a hard checkpoint that the packaged RISC-Q IP—not merely
+  # the nearly empty BD wrapper—was synthesized. Legacy ZCU216 behavior remains unchanged.
+  set _phase5a_ipruns {}
+  if {$PLATFORM eq "rfsoc4x2"} {
+    set _bd [get_files -quiet $BD_NAME.bd]
+    if {[llength $_bd] == 0} { error "RFSoC4x2 synthesis cannot find $BD_NAME.bd" }
+    create_ip_run $_bd
+    set _phase5a_ipruns [get_runs -quiet -filter {IS_SYNTHESIS && NAME != synth_1}]
+    set _riscq_ipruns [get_runs -quiet -filter {IS_SYNTHESIS && NAME =~ *_top_*}]
+    if {[llength $_riscq_ipruns] == 0} {
+      error "RFSoC4x2 synthesis created no *_top_* RISC-Q OOC run"
+    }
+    foreach _r $_phase5a_ipruns {
+      puts "\[run\] launching required OOC synthesis run $_r"
+      launch_runs $_r -jobs 1
+      wait_on_run $_r
+      if {[get_property PROGRESS $_r] ne "100%"} {
+        error "OOC synthesis failed for $_r — see $BUILD_DIR/$PRJ.runs/$_r"
+      }
+    }
+    foreach _r $_riscq_ipruns {
+      if {[get_property PROGRESS $_r] ne "100%"} {
+        error "RISC-Q OOC synthesis did not complete for $_r"
+      }
+      puts "\[run\] confirmed synthesized RISC-Q OOC run $_r"
+    }
+  }
   if {[info exists ::env(RISCQ_CSET_THRESH)] || [info exists ::env(RISCQ_IP_RETIMING)]} {
     set _bd [get_files -quiet $BD_NAME.bd]
     if {[llength $_bd]} { catch { create_ip_run $_bd } }
@@ -44,9 +72,17 @@ if {$RUN_SYNTH} {
     error "synthesis failed — see $BUILD_DIR/$PRJ.runs/synth_1"
   }
   open_run synth_1 -name synth_1
+  if {$PLATFORM eq "rfsoc4x2"} {
+    source $SCRIPT_DIR/$CONSTRAINTS_FILE
+  }
   report_utilization     -file $BUILD_DIR/util_synth.rpt
-  report_timing_summary  -file $BUILD_DIR/timing_synth.rpt -max_paths 20
-  puts "\[run\] synthesis OK — reports in $BUILD_DIR (util_synth.rpt / timing_synth.rpt)"
+  report_utilization -hierarchical -hierarchical_depth 4 -file $BUILD_DIR/util_synth_hier.rpt
+  report_timing_summary -report_unconstrained -file $BUILD_DIR/timing_synth.rpt -max_paths 20
+  check_timing -verbose -file $BUILD_DIR/check_timing_synth.rpt
+  report_clock_interaction -file $BUILD_DIR/clock_interaction_synth.rpt
+  report_cdc -details -file $BUILD_DIR/cdc_synth.rpt
+  report_methodology -file $BUILD_DIR/methodology_synth.rpt
+  puts "\[run\] synthesis OK — reports in $BUILD_DIR (util_synth*.rpt / timing_synth.rpt / check_timing_synth.rpt / clock_interaction_synth.rpt / cdc_synth.rpt / methodology_synth.rpt)"
 }
 
 if {$RUN_IMPL} {

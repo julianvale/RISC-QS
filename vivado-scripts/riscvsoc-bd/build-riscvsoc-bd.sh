@@ -21,9 +21,9 @@
 # The qubit count / DAC-ADC maps / interpolation all come from the JSON config; the tcl flow discovers the
 # core count from the netlist, so a different config just needs a matching floorplan (pblocks-bd.tcl).
 #
-# ZCU216 retains the legacy full-build default. RFSoC4x2 defaults to validation-only: package the IP,
-# construct and validate the BD, create its HDL wrapper, and stop without generate_target, OOC run
-# creation, synthesis, implementation, bitstream, or XSA export.
+# ZCU216 retains the legacy full-build default. RFSoC4x2 defaults to validation-only. Its synthesis
+# checkpoint is a separate explicit opt-in that permits target generation plus required OOC/top
+# synthesis, while still prohibiting implementation, bitstream generation, and XSA export.
 #
 # Usage:
 #   ./build-riscvsoc-bd.sh                    # zcu216-14q config, full floorplan, synth+impl+bitstream+xsa
@@ -32,9 +32,11 @@
 #   RISCQ_SKIP_GEN=1   ./build-riscvsoc-bd.sh # reuse the RTL already in the build dir (skip mill)
 #   RISCQ_PROJ_NAME=foo ./build-riscvsoc-bd.sh # build into <repo>/build/foo (parallel designs)
 #   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BOARD_REPO=/path/to/boards ./build-riscvsoc-bd.sh # validation only
+#   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BUILD_MODE=synthesis RISCQ_BOARD_REPO=/path/to/boards \
+#     ./build-riscvsoc-bd.sh # explicit synthesis-only checkpoint
 #
 # Env: RISCQ_VIVADO_BIN, RISCQ_CONFIG (default software/configs/zcu216-14q.json), RISCQ_SKIP_GEN,
-#   RISCQ_BUILD_MODE (validation|full; defaults validation on RFSoC4x2 and full on ZCU216),
+#   RISCQ_BUILD_MODE (validation|synthesis|full; defaults validation on RFSoC4x2 and full on ZCU216),
 #   RISCQ_RUN_BITSTREAM (legacy ZCU216 full mode: default 1; set 0 for impl-only),
 #   RISCQ_PROJ_NAME (default riscvsoc-bd), plus the floorplan knobs read by pblocks-bd.tcl:
 #   RISCQ_{ROW,PERROW,CONFINE}, RISCQ_BD_BASE, and RISCQ_PLACE_DIRECTIVE (default ExtraNetDelay_high —
@@ -69,6 +71,12 @@ else
 fi
 case "$BUILD_MODE" in
   validation) ;;
+  synthesis)
+    if [ "$PLATFORM" != "rfsoc4x2" ]; then
+      echo "[riscvsoc-bd] synthesis checkpoint mode is RFSoC4x2-only" >&2
+      exit 2
+    fi
+    ;;
   full)
     if [ "$PLATFORM" = "rfsoc4x2" ]; then
       echo "[riscvsoc-bd] RFSoC4x2 full builds are disabled; use RISCQ_BUILD_MODE=validation" >&2
@@ -76,7 +84,7 @@ case "$BUILD_MODE" in
     fi
     ;;
   *)
-    echo "[riscvsoc-bd] unsupported RISCQ_BUILD_MODE '$BUILD_MODE' (expected validation or full)" >&2
+    echo "[riscvsoc-bd] unsupported RISCQ_BUILD_MODE '$BUILD_MODE' (expected validation, synthesis, or full)" >&2
     exit 2
     ;;
 esac
@@ -99,6 +107,7 @@ fi
 export RISCQ_PROJ_NAME="$PROJ"
 export RISCQ_BUILD_DIR="$BUILD"
 export RISCQ_PLATFORM="$PLATFORM"
+export RISCQ_BUILD_MODE="$BUILD_MODE"
 if [ "$BUILD_MODE" = "validation" ]; then
   export RISCQ_VALIDATE_ONLY=1
   export RISCQ_GENERATE_TARGETS=0
@@ -107,7 +116,17 @@ if [ "$BUILD_MODE" = "validation" ]; then
   export RISCQ_RUN_BITSTREAM=0
   unset RISCQ_PBLOCK RISCQ_PBLOCK_TCL RISCQ_IP_RETIMING RISCQ_CSET_THRESH RISCQ_PLACE_DIRECTIVE
   echo "[riscvsoc-bd] validating block design in $BUILD (no targets, runs, synthesis, implementation, bitstream, or XSA) …"
+elif [ "$BUILD_MODE" = "synthesis" ]; then
+  export RISCQ_RFSOC4X2_SYNTHESIS_OPT_IN=1
+  export RISCQ_VALIDATE_ONLY=0
+  export RISCQ_GENERATE_TARGETS=1
+  export RISCQ_RUN_SYNTH=1
+  export RISCQ_RUN_IMPL=0
+  export RISCQ_RUN_BITSTREAM=0
+  unset RISCQ_PBLOCK RISCQ_PBLOCK_TCL RISCQ_IP_RETIMING RISCQ_CSET_THRESH RISCQ_PLACE_DIRECTIVE
+  echo "[riscvsoc-bd] RFSoC4x2 SYNTHESIS-ONLY opt-in: targets + required OOC/top synthesis; no implementation, bitstream, or XSA …"
 else
+  unset RISCQ_RFSOC4X2_SYNTHESIS_OPT_IN
   export RISCQ_VALIDATE_ONLY=0
   export RISCQ_GENERATE_TARGETS=1
   export RISCQ_PBLOCK=1
@@ -125,6 +144,11 @@ echo "[riscvsoc-bd] ============================================================
 echo "[riscvsoc-bd] done. reports in $BUILD"
 if [ "$BUILD_MODE" = "validation" ]; then
   echo "[riscvsoc-bd] validation-only flow complete; no build runs were requested"
+elif [ "$BUILD_MODE" = "synthesis" ]; then
+  echo "[riscvsoc-bd] synthesis-only checkpoint complete; implementation, bitstream, and XSA were not requested"
+  if [ -f "$BUILD/timing_synth.rpt" ]; then
+    echo "[riscvsoc-bd] synthesis timing summary: $BUILD/timing_synth.rpt"
+  fi
 else
   if [ -f "$BUILD/timing_impl.rpt" ]; then
     echo "[riscvsoc-bd] impl WNS/TNS (timing_impl.rpt):"

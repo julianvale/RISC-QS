@@ -94,7 +94,12 @@ object GenPulseTableSocJson extends App {
 
   // Vivado mode uses LUT6 packing. The external-clock wrapper belongs only to the ZCU216 board path;
   // RFSoC4x2 receives hostClk from PS pl_clk0 and dspClk from RFDC clk_dac0 inside the block design.
-  val spinal = SpinalConfig(mode = Verilog, targetDirectory = dir, romReuse = true)
+  // Vivado's BD IP sharing relocates packaged HDL into ipshared/ but leaves standalone readmem files
+  // under the per-instance IP directory, so relative `$readmemb` paths fail in RFSoC4x2 OOC synthesis.
+  // Inline its three small initialized memories. Keep the established shared-bin behavior for ZCU216
+  // and non-Vivado generators, where romReuse avoids duplicating identical per-core init files.
+  val spinal = SpinalConfig(mode = Verilog, targetDirectory = dir, romReuse = true,
+    inlineRom = vivadoMode && platform == "rfsoc4x2")
   val emit   = if (vivadoMode) spinal.setScopeProperty(LutInputs, 6) else spinal
   emit.generate(buildSoc())
   val emitClockInterface = vivadoMode && platform == "zcu216"

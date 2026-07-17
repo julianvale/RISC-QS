@@ -42,6 +42,8 @@ set TOP_MODULE    PulseTableSoc
 set BD_NAME       riscq_bd
 set DSP_FREQ      $DEFAULT_DSP_FREQ
 set HOST_FREQ     $DEFAULT_HOST_FREQ
+set BUILD_MODE    [expr {$PLATFORM eq "rfsoc4x2" ? "validation" : "full"}]
+if {[info exists ::env(RISCQ_BUILD_MODE)]} { set BUILD_MODE $::env(RISCQ_BUILD_MODE) }
 
 # Run stages. The legacy ZCU216 profile retains synthesis-on behavior. RFSoC4x2 defaults to a safe
 # validation-only profile: no target generation, IP/OOC run creation, synthesis, implementation, or XSA.
@@ -63,16 +65,6 @@ if {[info exists ::env(RISCQ_RUN_SYNTH)]}     { set RUN_SYNTH     $::env(RISCQ_R
 if {[info exists ::env(RISCQ_RUN_IMPL)]}      { set RUN_IMPL      $::env(RISCQ_RUN_IMPL) }
 if {[info exists ::env(RISCQ_RUN_BITSTREAM)]} { set RUN_BITSTREAM $::env(RISCQ_RUN_BITSTREAM) }
 
-# The RFDC profile, generated RTL metadata, and runtime PYNQ clock setup are one fixed timing contract.
-if {$PLATFORM eq "rfsoc4x2"} {
-  if {$DSP_FREQ != 491520000 || $HOST_FREQ != 99999985} {
-    error "RFSoC4x2 requires RISCQ_DSP_FREQ=491520000 and nominal-100MHz RISCQ_HOST_FREQ=99999985"
-  }
-  if {!$VALIDATE_ONLY} {
-    error "RFSoC4x2 full builds are disabled; set RISCQ_VALIDATE_ONLY=1"
-  }
-}
-
 # Bitstream implies implementation.
 if {$RUN_BITSTREAM} { set RUN_IMPL 1 }
 if {$VALIDATE_ONLY} {
@@ -80,6 +72,35 @@ if {$VALIDATE_ONLY} {
   set RUN_SYNTH 0
   set RUN_IMPL 0
   set RUN_BITSTREAM 0
+}
+
+# The RFDC profile, generated RTL metadata, and runtime PYNQ clock setup are one fixed timing contract.
+# RFSoC4x2 synthesis has a deliberately redundant opt-in: the named build mode plus a marker exported
+# only by build-riscvsoc-bd.sh. This prevents direct Tcl or stale stage flags from silently crossing the
+# validation-only default, and it admits exactly target generation + synthesis—not implementation.
+if {$PLATFORM eq "rfsoc4x2"} {
+  if {$DSP_FREQ != 491520000 || $HOST_FREQ != 99999985} {
+    error "RFSoC4x2 requires RISCQ_DSP_FREQ=491520000 and nominal-100MHz RISCQ_HOST_FREQ=99999985"
+  }
+  switch -- $BUILD_MODE {
+    validation {
+      if {!$VALIDATE_ONLY || $GENERATE_TARGETS || $RUN_SYNTH || $RUN_IMPL || $RUN_BITSTREAM} {
+        error "RFSoC4x2 validation mode must disable targets and every build run"
+      }
+    }
+    synthesis {
+      if {![info exists ::env(RISCQ_RFSOC4X2_SYNTHESIS_OPT_IN)] ||
+          $::env(RISCQ_RFSOC4X2_SYNTHESIS_OPT_IN) ne "1"} {
+        error "RFSoC4x2 synthesis requires the explicit build-riscvsoc-bd.sh synthesis opt-in"
+      }
+      if {$VALIDATE_ONLY || !$GENERATE_TARGETS || !$RUN_SYNTH || $RUN_IMPL || $RUN_BITSTREAM} {
+        error "RFSoC4x2 synthesis mode permits only targets/OOC/top synthesis; implementation and bitstream must remain disabled"
+      }
+    }
+    default {
+      error "RFSoC4x2 build mode '$BUILD_MODE' is disabled (expected validation or synthesis)"
+    }
+  }
 }
 
 # Paths. One folder per project under the repo-root build/ (git-ignored), so several designs build in
@@ -101,7 +122,7 @@ puts "\[config\] platform=$PLATFORM top=$TOP_MODULE part=$PART board_part=$BOARD
 if {$BOARD_REPO ne ""} { puts "\[config\] board_repo=$BOARD_REPO" }
 puts "\[config\] rfdc_config=$RFDC_CONFIG_SCRIPT rfdc_connect=$RFDC_CONNECT_SCRIPT"
 puts "\[config\] clock_interface=$USE_CLOCK_INTERFACE constraints=$CONSTRAINTS_FILE"
-puts "\[config\] dsp=${DSP_FREQ}Hz host=${HOST_FREQ}Hz validate_only=$VALIDATE_ONLY targets=$GENERATE_TARGETS synth=$RUN_SYNTH impl=$RUN_IMPL bit=$RUN_BITSTREAM"
+puts "\[config\] mode=$BUILD_MODE dsp=${DSP_FREQ}Hz host=${HOST_FREQ}Hz validate_only=$VALIDATE_ONLY targets=$GENERATE_TARGETS synth=$RUN_SYNTH impl=$RUN_IMPL bit=$RUN_BITSTREAM"
 puts "\[config\] rtl=$SOURCE_PATH  build=$BUILD_DIR"
 
 if {![file exists $SOURCE_PATH/$TOP_MODULE.v]} {

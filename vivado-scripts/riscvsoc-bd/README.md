@@ -14,7 +14,21 @@ RISCQ_BOARD_REPO=/path/to/vivado_boards \
 The board repository is the directory containing `rfsoc4x2/1.0/board.xml`. RFSoC4x2 validation
 packages the configured one-core IP, constructs and validates the block design, and creates the HDL
 wrapper. It explicitly skips `generate_target`, IP/OOC run creation, synthesis, implementation,
-bitstream, and XSA export. The wrapper rejects `RISCQ_BUILD_MODE=full` for RFSoC4x2 at present.
+bitstream, and XSA export.
+
+RFSoC4x2 synthesis is a separate, conspicuous opt-in:
+
+```bash
+RISCQ_PLATFORM=rfsoc4x2 \
+RISCQ_BUILD_MODE=synthesis \
+RISCQ_BOARD_REPO=/path/to/vivado_boards \
+./build-riscvsoc-bd.sh
+```
+
+This mode generates required output products, explicitly runs the BD's OOC IP synthesis runs (including
+the packaged RISC-Q top), runs `synth_1`, and writes synthesis timing/resource/clock/CDC/methodology reports.
+It forces pblocks, legacy ZCU216 IP retiming, implementation, bitstream, and XSA generation off.
+`RISCQ_BUILD_MODE=full` remains rejected for RFSoC4x2.
 
 RFSoC4x2 uses PS `pl_clk0` at nominal 100 MHz (Vivado metadata: 99,999,985 Hz) for host/control AXI and
 RFDC `clk_dac0` at 491.52 MHz for the
