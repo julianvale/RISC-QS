@@ -12,3 +12,9 @@
 set_clock_groups -asynchronous \
   -group [get_clocks -include_generated_clocks clk_pl_0] \
   -group [get_clocks -include_generated_clocks RFDAC0_CLK]
+
+# RFDC 2.6 writes its 491.52 MHz fabric period with only three decimal places: 2.035 ns rather than
+# 2.034505208 ns. Vivado timing values are quantized to integer picoseconds, so use a conservative
+# 0.001 ns setup uncertainty to cover the 0.000495 ns rounding. Same-edge hold analysis is independent
+# of this period correction.
+set_clock_uncertainty -setup 0.001 [get_clocks -quiet {RFDAC0_CLK RFDAC1_CLK RFDAC2_CLK}]

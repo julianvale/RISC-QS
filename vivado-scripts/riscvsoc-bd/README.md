@@ -30,6 +30,22 @@ the packaged RISC-Q top), runs `synth_1`, and writes synthesis timing/resource/c
 It forces pblocks, legacy ZCU216 IP retiming, implementation, bitstream, and XSA generation off.
 `RISCQ_BUILD_MODE=full` remains rejected for RFSoC4x2.
 
+RFSoC4x2 implementation and deployment artifacts require a second, separate opt-in:
+
+```bash
+RISCQ_PLATFORM=rfsoc4x2 \
+RISCQ_BUILD_MODE=deployment \
+RISCQ_BOARD_REPO=/path/to/vivado_boards \
+./build-riscvsoc-bd.sh
+```
+
+Deployment runs OOC/top synthesis and implementation, stops at the routed design for setup/hold,
+DRC, methodology, CDC, clock, route, resource, and warning review, and blocks bitstream generation on
+negative setup/hold slack, error/critical DRC violations, missing required clocks, or unrouted nets.
+Only after those gates pass does it write matching `PulseTableSoc.bit` and PYNQ-readable
+`PulseTableSoc.hwh` artifacts. It does not export an XSA and contains no board-programming, overlay,
+clock-chip, MMIO, firmware, or other board-access step. `RISCQ_BUILD_MODE=full` remains disabled.
+
 RFSoC4x2 uses PS `pl_clk0` at nominal 100 MHz (Vivado metadata: 99,999,985 Hz) for host/control AXI and
 RFDC `clk_dac0` at 491.52 MHz for the
 RISC-Q DSP and all active/dummy RFDC AXIS interfaces. It does not generate or instantiate the ZCU216

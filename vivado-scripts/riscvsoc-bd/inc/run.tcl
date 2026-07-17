@@ -109,25 +109,77 @@ if {$RUN_IMPL} {
     set_property STEPS.PLACE_DESIGN.TCL.PRE $_ppre [get_runs impl_1]
     puts "\[run\] pblock floorplan: $_ppre (RISCQ_PBLOCK=$::env(RISCQ_PBLOCK))"
   }
-  if {$RUN_BITSTREAM} {
+  # RFSoC4x2 deployment stops at a routed checkpoint first. Reports and hard timing/DRC/clock gates
+  # must pass before write_bitstream is allowed to run.
+  set _rfsoc4x2_deployment [expr {$PLATFORM eq "rfsoc4x2" && $BUILD_MODE eq "deployment"}]
+  if {$_rfsoc4x2_deployment} {
+    launch_runs impl_1 -to_step {phys_opt_design (Post-Route)} -jobs 1
+  } elseif {$RUN_BITSTREAM} {
     launch_runs impl_1 -to_step write_bitstream -jobs 1
   } else {
     launch_runs impl_1 -jobs 1
   }
   wait_on_run impl_1
-  if {[get_property PROGRESS [get_runs impl_1]] != "100%"} {
+  # A deployment run deliberately stops at post-route phys_opt, so Vivado leaves write_bitstream as
+  # the next unstarted step and reports less than 100% progress. A successful wait_on_run plus the
+  # routed signoff gates below are authoritative for that mode.
+  if {!$_rfsoc4x2_deployment && [get_property PROGRESS [get_runs impl_1]] != "100%"} {
     error "implementation failed — see $BUILD_DIR/$PRJ.runs/impl_1"
   }
   open_run impl_1
-  report_utilization    -file $BUILD_DIR/util_impl.rpt
-  report_timing_summary -file $BUILD_DIR/timing_impl.rpt -max_paths 20
+  report_utilization -file $BUILD_DIR/util_impl.rpt
+  report_utilization -hierarchical -hierarchical_depth 4 -file $BUILD_DIR/util_impl_hier.rpt
+  report_timing_summary -delay_type min_max -report_unconstrained -file $BUILD_DIR/timing_impl.rpt -max_paths 20
+  check_timing -verbose -file $BUILD_DIR/check_timing_impl.rpt
+  report_clock_interaction -file $BUILD_DIR/clock_interaction_impl.rpt
+  report_clocks -file $BUILD_DIR/clocks_impl.rpt
+  report_clock_utilization -file $BUILD_DIR/clock_utilization_impl.rpt
+  report_route_status -file $BUILD_DIR/route_status_impl.rpt
+  report_drc -file $BUILD_DIR/drc_impl.rpt
+  report_methodology -file $BUILD_DIR/methodology_impl.rpt
+  report_cdc -details -file $BUILD_DIR/cdc_impl.rpt
   # per-cone failing-endpoint classifier (specs/riscv-fmax.md A1) → cones_impl.rpt / cones_paths.tsv
   if {[catch {
     set CONES_DIR $BUILD_DIR
     source $SCRIPT_DIR/../report-cones.tcl
   } _ce]} { puts "\[run\] WARN: report-cones failed: $_ce" }
-  puts "\[run\] implementation OK — reports in $BUILD_DIR (util_impl.rpt / timing_impl.rpt / cones_impl.rpt)"
-  if {$RUN_BITSTREAM} {
+  if {$_rfsoc4x2_deployment} {
+    foreach _clock_name {RFDAC0_CLK clk_pl_0} {
+      if {[llength [get_clocks -quiet $_clock_name]] != 1} {
+        error "routed clock failure: expected exactly one $_clock_name clock"
+      }
+    }
+    set _setup_path [get_timing_paths -quiet -delay_type max -max_paths 1 -nworst 1]
+    set _hold_path  [get_timing_paths -quiet -delay_type min -max_paths 1 -nworst 1]
+    if {[llength $_setup_path] == 0 || [llength $_hold_path] == 0} {
+      error "routed timing failure: no setup or hold path was available for signoff"
+    }
+    set _setup_slack [get_property SLACK $_setup_path]
+    set _hold_slack  [get_property SLACK $_hold_path]
+    puts "\[run\] routed signoff slack: setup=${_setup_slack}ns hold=${_hold_slack}ns"
+    if {$_setup_slack < 0.0 || $_hold_slack < 0.0} {
+      error "routed timing failure: setup=${_setup_slack}ns hold=${_hold_slack}ns; bitstream blocked"
+    }
+    set _bad_drc [get_drc_violations -quiet -filter {SEVERITY == "Error" || SEVERITY == "Critical Warning"}]
+    if {[llength $_bad_drc] != 0} {
+      error "routed DRC failure: [llength $_bad_drc] error/critical-warning violations; bitstream blocked"
+    }
+    set _unrouted [get_nets -quiet -filter {ROUTE_STATUS == "UNROUTED" || ROUTE_STATUS == "PARTIAL"}]
+    if {[llength $_unrouted] != 0} {
+      error "routed clock/design failure: [llength $_unrouted] unrouted/partial nets; bitstream blocked"
+    }
+  }
+  puts "\[run\] implementation OK — routed reports in $BUILD_DIR"
+  if {$_rfsoc4x2_deployment} {
+    write_bitstream -force $BUILD_DIR/$TOP_MODULE.bit
+    set _hwh $BUILD_DIR/bd/$BD_NAME/hw_handoff/$BD_NAME.hwh
+    if {![file exists $_hwh] || [file size $_hwh] == 0} {
+      error "PYNQ metadata failure: generated HWH missing or empty at $_hwh"
+    }
+    file copy -force $_hwh $BUILD_DIR/$TOP_MODULE.hwh
+    puts "\[run\] bitstream -> $BUILD_DIR/$TOP_MODULE.bit"
+    puts "\[run\] PYNQ hardware metadata -> $BUILD_DIR/$TOP_MODULE.hwh"
+  } elseif {$RUN_BITSTREAM} {
     file copy -force $BUILD_DIR/$PRJ.runs/impl_1/${BD_NAME}_wrapper.bit $BUILD_DIR/$TOP_MODULE.bit
     puts "\[run\] bitstream -> $BUILD_DIR/$TOP_MODULE.bit"
     # Hardware handoff for the software flow (Vitis / PetaLinux): a fixed (non-DFX) platform with the

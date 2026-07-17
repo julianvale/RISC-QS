@@ -75,9 +75,9 @@ if {$VALIDATE_ONLY} {
 }
 
 # The RFDC profile, generated RTL metadata, and runtime PYNQ clock setup are one fixed timing contract.
-# RFSoC4x2 synthesis has a deliberately redundant opt-in: the named build mode plus a marker exported
-# only by build-riscvsoc-bd.sh. This prevents direct Tcl or stale stage flags from silently crossing the
-# validation-only default, and it admits exactly target generation + synthesis—not implementation.
+# RFSoC4x2 synthesis and deployment have deliberately redundant opt-ins: the named build mode plus a
+# mode-specific marker exported only by build-riscvsoc-bd.sh. This prevents direct Tcl or stale stage
+# flags from silently crossing the validation-only default.
 if {$PLATFORM eq "rfsoc4x2"} {
   if {$DSP_FREQ != 491520000 || $HOST_FREQ != 99999985} {
     error "RFSoC4x2 requires RISCQ_DSP_FREQ=491520000 and nominal-100MHz RISCQ_HOST_FREQ=99999985"
@@ -97,8 +97,17 @@ if {$PLATFORM eq "rfsoc4x2"} {
         error "RFSoC4x2 synthesis mode permits only targets/OOC/top synthesis; implementation and bitstream must remain disabled"
       }
     }
+    deployment {
+      if {![info exists ::env(RISCQ_RFSOC4X2_DEPLOYMENT_OPT_IN)] ||
+          $::env(RISCQ_RFSOC4X2_DEPLOYMENT_OPT_IN) ne "1"} {
+        error "RFSoC4x2 deployment requires the explicit build-riscvsoc-bd.sh deployment opt-in"
+      }
+      if {$VALIDATE_ONLY || !$GENERATE_TARGETS || !$RUN_SYNTH || !$RUN_IMPL || !$RUN_BITSTREAM} {
+        error "RFSoC4x2 deployment mode requires targets, synthesis, implementation, routed signoff, and bitstream"
+      }
+    }
     default {
-      error "RFSoC4x2 build mode '$BUILD_MODE' is disabled (expected validation or synthesis)"
+      error "RFSoC4x2 build mode '$BUILD_MODE' is disabled (expected validation, synthesis, or deployment)"
     }
   }
 }

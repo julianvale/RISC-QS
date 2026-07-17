@@ -23,7 +23,9 @@
 #
 # ZCU216 retains the legacy full-build default. RFSoC4x2 defaults to validation-only. Its synthesis
 # checkpoint is a separate explicit opt-in that permits target generation plus required OOC/top
-# synthesis, while still prohibiting implementation, bitstream generation, and XSA export.
+# synthesis, while still prohibiting implementation and deployment artifacts. A second explicit
+# deployment mode runs routed signoff and emits a bitstream plus PYNQ HWH metadata; it never accesses
+# a board.
 #
 # Usage:
 #   ./build-riscvsoc-bd.sh                    # zcu216-14q config, full floorplan, synth+impl+bitstream+xsa
@@ -34,9 +36,11 @@
 #   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BOARD_REPO=/path/to/boards ./build-riscvsoc-bd.sh # validation only
 #   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BUILD_MODE=synthesis RISCQ_BOARD_REPO=/path/to/boards \
 #     ./build-riscvsoc-bd.sh # explicit synthesis-only checkpoint
+#   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BUILD_MODE=deployment RISCQ_BOARD_REPO=/path/to/boards \
+#     ./build-riscvsoc-bd.sh # explicit implementation + routed signoff + bit/HWH checkpoint
 #
 # Env: RISCQ_VIVADO_BIN, RISCQ_CONFIG (default software/configs/zcu216-14q.json), RISCQ_SKIP_GEN,
-#   RISCQ_BUILD_MODE (validation|synthesis|full; defaults validation on RFSoC4x2 and full on ZCU216),
+#   RISCQ_BUILD_MODE (validation|synthesis|deployment|full; defaults validation on RFSoC4x2 and full on ZCU216),
 #   RISCQ_RUN_BITSTREAM (legacy ZCU216 full mode: default 1; set 0 for impl-only),
 #   RISCQ_PROJ_NAME (default riscvsoc-bd), plus the floorplan knobs read by pblocks-bd.tcl:
 #   RISCQ_{ROW,PERROW,CONFINE}, RISCQ_BD_BASE, and RISCQ_PLACE_DIRECTIVE (default ExtraNetDelay_high —
@@ -77,6 +81,12 @@ case "$BUILD_MODE" in
       exit 2
     fi
     ;;
+  deployment)
+    if [ "$PLATFORM" != "rfsoc4x2" ]; then
+      echo "[riscvsoc-bd] deployment checkpoint mode is RFSoC4x2-only" >&2
+      exit 2
+    fi
+    ;;
   full)
     if [ "$PLATFORM" = "rfsoc4x2" ]; then
       echo "[riscvsoc-bd] RFSoC4x2 full builds are disabled; use RISCQ_BUILD_MODE=validation" >&2
@@ -84,7 +94,7 @@ case "$BUILD_MODE" in
     fi
     ;;
   *)
-    echo "[riscvsoc-bd] unsupported RISCQ_BUILD_MODE '$BUILD_MODE' (expected validation, synthesis, or full)" >&2
+    echo "[riscvsoc-bd] unsupported RISCQ_BUILD_MODE '$BUILD_MODE' (expected validation, synthesis, deployment, or full)" >&2
     exit 2
     ;;
 esac
@@ -125,8 +135,19 @@ elif [ "$BUILD_MODE" = "synthesis" ]; then
   export RISCQ_RUN_BITSTREAM=0
   unset RISCQ_PBLOCK RISCQ_PBLOCK_TCL RISCQ_IP_RETIMING RISCQ_CSET_THRESH RISCQ_PLACE_DIRECTIVE
   echo "[riscvsoc-bd] RFSoC4x2 SYNTHESIS-ONLY opt-in: targets + required OOC/top synthesis; no implementation, bitstream, or XSA …"
+elif [ "$BUILD_MODE" = "deployment" ]; then
+  unset RISCQ_RFSOC4X2_SYNTHESIS_OPT_IN
+  export RISCQ_RFSOC4X2_DEPLOYMENT_OPT_IN=1
+  export RISCQ_VALIDATE_ONLY=0
+  export RISCQ_GENERATE_TARGETS=1
+  export RISCQ_RUN_SYNTH=1
+  export RISCQ_RUN_IMPL=1
+  export RISCQ_RUN_BITSTREAM=1
+  unset RISCQ_PBLOCK RISCQ_PBLOCK_TCL RISCQ_IP_RETIMING RISCQ_CSET_THRESH RISCQ_PLACE_DIRECTIVE
+  echo "[riscvsoc-bd] RFSoC4x2 DEPLOYMENT opt-in: OOC/top synthesis + implementation + routed signoff + bit/HWH; NO BOARD ACCESS …"
 else
   unset RISCQ_RFSOC4X2_SYNTHESIS_OPT_IN
+  unset RISCQ_RFSOC4X2_DEPLOYMENT_OPT_IN
   export RISCQ_VALIDATE_ONLY=0
   export RISCQ_GENERATE_TARGETS=1
   export RISCQ_PBLOCK=1
@@ -149,6 +170,11 @@ elif [ "$BUILD_MODE" = "synthesis" ]; then
   if [ -f "$BUILD/timing_synth.rpt" ]; then
     echo "[riscvsoc-bd] synthesis timing summary: $BUILD/timing_synth.rpt"
   fi
+elif [ "$BUILD_MODE" = "deployment" ]; then
+  echo "[riscvsoc-bd] deployment checkpoint complete; no board was accessed"
+  echo "[riscvsoc-bd] routed signoff: $BUILD/timing_impl.rpt / drc_impl.rpt / methodology_impl.rpt / cdc_impl.rpt"
+  echo "[riscvsoc-bd] bitstream: $BUILD/PulseTableSoc.bit"
+  echo "[riscvsoc-bd] PYNQ metadata: $BUILD/PulseTableSoc.hwh"
 else
   if [ -f "$BUILD/timing_impl.rpt" ]; then
     echo "[riscvsoc-bd] impl WNS/TNS (timing_impl.rpt):"
