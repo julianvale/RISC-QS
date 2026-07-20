@@ -243,13 +243,15 @@ def rerun(drv, m: SocMap, progs: dict[int, Program],
         for name, values in arrays.get(core, {}).items():
             write_array(drv, m, core, prog, name, values)
     reset(drv, m, on=False)
-    for core, prog in progs.items():
-        poll_done(drv, m, core, prog, timeout=timeout)
-    out = {core: {name: read_array(drv, m, core, prog, name)
-                  for name in (list(prog.arrays) if results is None else results)}
-           for core, prog in progs.items()}
-    reset(drv, m, on=True)
-    return out
+    try:
+        for core, prog in progs.items():
+            poll_done(drv, m, core, prog, timeout=timeout)
+        return {core: {name: read_array(drv, m, core, prog, name)
+                       for name in (list(prog.arrays) if results is None else results)}
+                for core, prog in progs.items()}
+    finally:
+        # A timeout, read failure, or result-copy exception must never leave firmware running.
+        reset(drv, m, on=True)
 
 
 def run(drv, m: SocMap, progs: dict[int, Program],

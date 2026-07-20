@@ -113,6 +113,7 @@ if {$RUN_IMPL} {
   # must pass before write_bitstream is allowed to run.
   set _rfsoc4x2_deployment [expr {$PLATFORM eq "rfsoc4x2" && $BUILD_MODE eq "deployment"}]
   if {$_rfsoc4x2_deployment} {
+    set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE ExtraNetDelay_high [get_runs impl_1]
     launch_runs impl_1 -to_step {phys_opt_design (Post-Route)} -jobs 1
   } elseif {$RUN_BITSTREAM} {
     launch_runs impl_1 -to_step write_bitstream -jobs 1
@@ -172,12 +173,17 @@ if {$RUN_IMPL} {
   puts "\[run\] implementation OK — routed reports in $BUILD_DIR"
   if {$_rfsoc4x2_deployment} {
     write_bitstream -force $BUILD_DIR/$TOP_MODULE.bit
+    write_debug_probes -force $BUILD_DIR/$TOP_MODULE.ltx
+    if {![file exists $BUILD_DIR/$TOP_MODULE.ltx] || [file size $BUILD_DIR/$TOP_MODULE.ltx] == 0} {
+      error "debug observability failure: generated probe map missing or empty at $BUILD_DIR/$TOP_MODULE.ltx"
+    }
     set _hwh $BUILD_DIR/bd/$BD_NAME/hw_handoff/$BD_NAME.hwh
     if {![file exists $_hwh] || [file size $_hwh] == 0} {
       error "PYNQ metadata failure: generated HWH missing or empty at $_hwh"
     }
     file copy -force $_hwh $BUILD_DIR/$TOP_MODULE.hwh
     puts "\[run\] bitstream -> $BUILD_DIR/$TOP_MODULE.bit"
+    puts "\[run\] debug probes -> $BUILD_DIR/$TOP_MODULE.ltx"
     puts "\[run\] PYNQ hardware metadata -> $BUILD_DIR/$TOP_MODULE.hwh"
   } elseif {$RUN_BITSTREAM} {
     file copy -force $BUILD_DIR/$PRJ.runs/impl_1/${BD_NAME}_wrapper.bit $BUILD_DIR/$TOP_MODULE.bit

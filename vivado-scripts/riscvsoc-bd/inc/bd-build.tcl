@@ -115,6 +115,43 @@ if {$USE_CLOCK_INTERFACE} {
   connect_bd_net [get_bd_pins ps_rst/peripheral_aresetn] [get_bd_pins $AXI_CONNECT/aresetn]
 }
 
+# RFSoC4x2 Phase 5C observability only: sample the shared control reset and the PS/SmartConnect AXI
+# boundaries without changing the functional datapath. A later JTAG capture can distinguish reset,
+# request-acceptance, routing, and missing-slave-response failures after a separately authorized load.
+if {$PLATFORM eq "rfsoc4x2"} {
+  set CONTROL_ILA [create_bd_cell -type ip -vlnv xilinx.com:ip:system_ila:1.1 control_ila]
+  set_property -dict [list CONFIG.C_MON_TYPE {MIX} CONFIG.C_DATA_DEPTH {1024} \
+    CONFIG.C_NUM_MONITOR_SLOTS {3} CONFIG.C_NUM_OF_PROBES {2} \
+    CONFIG.C_PROBE0_WIDTH {1} CONFIG.C_PROBE1_WIDTH {1}] $CONTROL_ILA
+
+  set _control_clk_net [get_bd_nets -quiet -of_objects [get_bd_pins zynq_ps/pl_clk0]]
+  if {[llength $_control_clk_net] != 1} {
+    error "control ILA expected exactly one existing pl_clk0 net"
+  }
+  connect_bd_net -net $_control_clk_net [get_bd_pins $CONTROL_ILA/clk]
+
+  set _reset_probe_index 0
+  foreach _reset_pin {zynq_ps/pl_resetn0 ps_rst/peripheral_aresetn} {
+    set _reset_net [get_bd_nets -quiet -of_objects [get_bd_pins $_reset_pin]]
+    if {[llength $_reset_net] != 1} {
+      error "control ILA reset probe $_reset_probe_index expected exactly one net at $_reset_pin"
+    }
+    connect_bd_net -net $_reset_net [get_bd_pins $CONTROL_ILA/probe${_reset_probe_index}]
+    incr _reset_probe_index
+  }
+
+  set _monitor_index 0
+  foreach _axi_pin {zynq_ps/M_AXI_HPM0_LPD smartconnect/M00_AXI smartconnect/M01_AXI} {
+    set _axi_net [get_bd_intf_nets -quiet -of_objects [get_bd_intf_pins $_axi_pin]]
+    if {[llength $_axi_net] != 1} {
+      error "control ILA slot $_monitor_index expected exactly one AXI net at $_axi_pin"
+    }
+    connect_bd_intf_net -intf_net $_axi_net [get_bd_intf_pins $_axi_pin] \
+      [get_bd_intf_pins $CONTROL_ILA/SLOT_${_monitor_index}_AXI]
+    incr _monitor_index
+  }
+}
+
 assign_bd_address -offset 0x80000000 -range 0x10000000 \
   -target_address_space [get_bd_addr_spaces zynq_ps/Data] [get_bd_addr_segs $TOP/S_AXIS/reg0] -force
 assign_bd_address
