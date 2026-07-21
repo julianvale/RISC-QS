@@ -77,9 +77,16 @@ set RESET_INACTIVE [create_bd_cell -type inline_hdl \
 set_property -dict [list CONFIG.CONST_WIDTH {1} CONFIG.CONST_VAL {0}] $RESET_INACTIVE
 connect_bd_net [get_bd_pins $RESET_LOCKED/dout] \
   [get_bd_pins ps_rst/dcm_locked] [get_bd_pins dsp_rst/dcm_locked]
-connect_bd_net [get_bd_pins $RESET_INACTIVE/dout] \
-  [get_bd_pins ps_rst/aux_reset_in] [get_bd_pins ps_rst/mb_debug_sys_rst] \
-  [get_bd_pins dsp_rst/aux_reset_in] [get_bd_pins dsp_rst/mb_debug_sys_rst]
+if {$PLATFORM eq "rfsoc4x2"} {
+  connect_bd_net [get_bd_pins $RESET_LOCKED/dout] \
+    [get_bd_pins ps_rst/aux_reset_in] [get_bd_pins dsp_rst/aux_reset_in]
+  connect_bd_net [get_bd_pins $RESET_INACTIVE/dout] \
+    [get_bd_pins ps_rst/mb_debug_sys_rst] [get_bd_pins dsp_rst/mb_debug_sys_rst]
+} else {
+  connect_bd_net [get_bd_pins $RESET_INACTIVE/dout] \
+    [get_bd_pins ps_rst/aux_reset_in] [get_bd_pins ps_rst/mb_debug_sys_rst] \
+    [get_bd_pins dsp_rst/aux_reset_in] [get_bd_pins dsp_rst/mb_debug_sys_rst]
+}
 if {$USE_CLOCK_INTERFACE} {
   connect_bd_net [get_bd_pins $CLKIFC/hostClk] [get_bd_pins ps_rst/slowest_sync_clk]
   connect_bd_net [get_bd_pins $CLKIFC/dspClk]  [get_bd_pins dsp_rst/slowest_sync_clk]
