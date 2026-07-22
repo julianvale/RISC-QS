@@ -28,8 +28,21 @@ def set_time_offset(drv, m: SocMap, t: int) -> None:
 
 
 def load_program(drv, m: SocMap, core: int, image: Image) -> None:
-    """Block-write the flat image into the core's RAM window (load address 0x80000000)."""
-    drv.write_block(m.to_host_addr(core, image.entry), image.data)
+    """Load aligned words under reset and read back the complete flat image."""
+    if image.entry % 4 or len(image.data) == 0 or len(image.data) % 4:
+        raise ValueError("firmware entry and image length must be nonempty and word aligned")
+    base = m.to_host_addr(core, image.entry)
+    if len(image.data) > m.mem_bytes:
+        raise ValueError(f"image {len(image.data)} B exceeds RAM {m.mem_bytes} B")
+    words = [int.from_bytes(image.data[i:i + 4], "little")
+             for i in range(0, len(image.data), 4)]
+    for index, word in enumerate(words):
+        drv.write32(base + 4 * index, word)
+    for index, word in enumerate(words):
+        observed = int(drv.read32(base + 4 * index)) & 0xFFFFFFFF
+        if observed != word:
+            raise RuntimeError(f"firmware readback mismatch at {4 * index:#x}: "
+                               f"{observed:#010x} != {word:#010x}")
 
 
 def write_var(drv, m: SocMap, core: int, program: Program, name: str, value: int) -> None:
@@ -113,18 +126,27 @@ def park_core(drv, m: SocMap, core: int) -> None:
     drv.write32(m.imem(core), 0x6F)
 
 
-def poll_done(drv, m: SocMap, core: int, program: Program, timeout: int = 2_000_000) -> int:
+def poll_done(drv, m: SocMap, core: int, program: Program, timeout: int = 2_000_000,
+              timeout_s: float | None = None) -> int:
     """Poll __rq_status until DONE (0xD04E....); returns the full status word.
-    `timeout` is in sim/host-clock cycles when the driver has sim extras, else read iterations.
-    Loud TimeoutError with the last status on expiry."""
+    `timeout` remains the simulation-cycle/legacy iteration limit.  `timeout_s` is an independent
+    wall-clock deadline for every backend; when omitted it conservatively matches the legacy
+    hardware loop's one-millisecond polling budget. Loud TimeoutError includes the last status."""
+    if timeout <= 0:
+        raise ValueError("timeout must be positive")
+    timeout_s = max(timeout * 0.001, 0.001) if timeout_s is None else float(timeout_s)
+    if timeout_s <= 0:
+        raise ValueError("timeout_s must be positive")
+    deadline = _time.monotonic() + timeout_s
     addr = m.to_host_addr(core, program.var_addr("__rq_status"))
     sim = getattr(drv, "sim", None)
     chunk = 20_000
     spent = 0
     status = drv.read32(addr)
     while (status & STATUS_DONE_MASK) != STATUS_DONE:
-        if spent >= timeout:
-            raise TimeoutError(f"core {core} not DONE after {timeout} cycles "
+        if spent >= timeout or _time.monotonic() >= deadline:
+            raise TimeoutError(f"core {core} not DONE before the {timeout_s:g}s wall-clock "
+                               f"deadline / {timeout} cycle limit "
                                f"(__rq_status = {status:#010x})")
         if sim is not None:
             status = sim.poll_word(addr, not_equal=status, timeout_cycles=min(chunk, timeout - spent))
@@ -208,20 +230,25 @@ def setup(drv, m: SocMap, progs: dict[int, Program]) -> None:
         remote.setup(_params_json(m), {core: _prog_to_wire(prog) for core, prog in progs.items()})
         return
     reset(drv, m, on=True)
-    for core, prog in progs.items():
-        load_program(drv, m, core, prog.image)
-        load_envelopes(drv, m, core, prog)
-        load_tables(drv, m, core, prog)
-    for core in range(m.params.qubit_num):   # un-programmed cores boot too: park them
-        if core not in progs:
-            park_core(drv, m, core)
+    try:
+        for core, prog in progs.items():
+            load_program(drv, m, core, prog.image)
+            load_envelopes(drv, m, core, prog)
+            load_tables(drv, m, core, prog)
+        for core in range(m.params.qubit_num):   # un-programmed cores boot too: park them
+            if core not in progs:
+                park_core(drv, m, core)
+    except BaseException:
+        reset(drv, m, on=True)
+        raise
 
 
 def rerun(drv, m: SocMap, progs: dict[int, Program],
           params: dict[int, dict[str, int]] | None = None,
           arrays: dict[int, dict[str, object]] | None = None,
           results: list[str] | None = None,
-          timeout: int = 2_000_000) -> dict[int, dict[str, np.ndarray]]:
+          timeout: int = 2_000_000,
+          timeout_s: float | None = None) -> dict[int, dict[str, np.ndarray]]:
     """Re-run an already-`setup` batch without any reload: check magic -> clear status -> write
     params + host input arrays -> one reset release for all cores -> poll -> read results ->
     re-assert reset. Reuses the loaded image/envelopes/tables, so a whole sweep costs O(1) driver
@@ -242,10 +269,10 @@ def rerun(drv, m: SocMap, progs: dict[int, Program],
         write_params(drv, m, core, prog, params.get(core, {}))
         for name, values in arrays.get(core, {}).items():
             write_array(drv, m, core, prog, name, values)
-    reset(drv, m, on=False)
     try:
+        reset(drv, m, on=False)
         for core, prog in progs.items():
-            poll_done(drv, m, core, prog, timeout=timeout)
+            poll_done(drv, m, core, prog, timeout=timeout, timeout_s=timeout_s)
         return {core: {name: read_array(drv, m, core, prog, name)
                        for name in (list(prog.arrays) if results is None else results)}
                 for core, prog in progs.items()}
@@ -258,10 +285,11 @@ def run(drv, m: SocMap, progs: dict[int, Program],
         params: dict[int, dict[str, int]] | None = None,
         arrays: dict[int, dict[str, object]] | None = None,
         results: list[str] | None = None,
-        timeout: int = 2_000_000) -> dict[int, dict[str, np.ndarray]]:
+        timeout: int = 2_000_000,
+        timeout_s: float | None = None) -> dict[int, dict[str, np.ndarray]]:
     """The one-shot convenience: `setup` (load) then a single `rerun` (spec 08 §4)."""
     setup(drv, m, progs)
-    return rerun(drv, m, progs, params, arrays, results, timeout)
+    return rerun(drv, m, progs, params, arrays, results, timeout, timeout_s)
 
 
 def _env_window(m: SocMap, core: int, channel: int) -> tuple[int, int, int]:

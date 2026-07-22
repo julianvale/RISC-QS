@@ -1,5 +1,6 @@
-"""riscq control software: map / build / run over the 4-method Driver seam."""
+"""RISC-Q host control, deterministic bundles, and bounded board execution."""
 
+from riscq.api import Board, Firmware, HostTransport
 from riscq.map import SocParams, SocMap
 
-__all__ = ["SocParams", "SocMap"]
+__all__ = ["Board", "Firmware", "HostTransport", "SocParams", "SocMap"]

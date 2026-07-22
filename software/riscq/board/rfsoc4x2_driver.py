@@ -26,8 +26,9 @@ RFDC_BASE = 0x9000_0000
 RFDC_SIZE = 0x0004_0000
 LMK_MHZ = 245.76
 LMX_MHZ = 491.52
-EXPECTED_BIT_SHA256 = "f07f74c396dfab9bc03086b409e495c6d7c70b9a6005784f6821eada77ed7c9c"
-EXPECTED_HWH_SHA256 = "8e4ace9f69cc6bde787eb08b0a4a6cd5035d81264c8bc8102a96e693aafc4fc4"
+EXPECTED_BIT_SHA256 = "5ffe224d38a1ee5e4a1d5eee8fa0988644a8e37492bba4a45c9412fc815eff0f"
+EXPECTED_HWH_SHA256 = "d3eddfd06915e1b35d62bc44316092438758224842896143856898980b47e983"
+EXPECTED_PARAMS_SHA256 = "bad1e52c9c8b1417bf57b879e3c817a0a8c44ed32a71c682a92b30c4eb1d7156"
 
 
 def _sha256(path: Path) -> str:
@@ -48,7 +49,7 @@ class Rfsoc4x2Driver:
         missing = [str(path) for path in (self.bit_path, self.hwh_path, self.params_path)
                    if not path.is_file()]
         if missing:
-            raise FileNotFoundError(f"missing Phase 5C bundle files: {missing}")
+            raise FileNotFoundError(f"missing accepted RFSoC4x2 platform files: {missing}")
         self.hashes = {
             self.bit_path.name: _sha256(self.bit_path),
             self.hwh_path.name: _sha256(self.hwh_path),
@@ -60,6 +61,9 @@ class Rfsoc4x2Driver:
         if self.hashes[self.hwh_path.name] != EXPECTED_HWH_SHA256:
             raise RuntimeError(f"hwh hash {self.hashes[self.hwh_path.name]} != accepted "
                                f"{EXPECTED_HWH_SHA256}")
+        if self.hashes[self.params_path.name] != EXPECTED_PARAMS_SHA256:
+            raise RuntimeError(f"raw params hash {self.hashes[self.params_path.name]} != accepted "
+                               f"{EXPECTED_PARAMS_SHA256}")
 
         raw = json.loads(self.params_path.read_text())
         self.params = SocParams.from_json(json.dumps(raw))
@@ -98,14 +102,14 @@ class Rfsoc4x2Driver:
         if rfdc_driver is not xrfdc.RFdc:
             raise RuntimeError(f"matching HWH parsed but RFDC driver is {rfdc_driver!r}, "
                                f"expected {xrfdc.RFdc!r}")
-        print("PHASE5C_OVERLAY_METADATA_OK", flush=True)
-        print("PHASE5C_DOWNLOAD_BEGIN", flush=True)
+        print("RFSOC4X2_OVERLAY_METADATA_OK", flush=True)
+        print("RFSOC4X2_DOWNLOAD_BEGIN", flush=True)
         overlay.download()
-        print("PHASE5C_DOWNLOAD_RETURNED", flush=True)
+        print("RFSOC4X2_DOWNLOAD_RETURNED", flush=True)
         self.overlay = overlay
-        print("PHASE5C_RFDC_CONSTRUCT_BEGIN", flush=True)
+        print("RFSOC4X2_RFDC_CONSTRUCT_BEGIN", flush=True)
         self.rfdc = overlay.rf_data_converter
-        print("PHASE5C_RFDC_CONSTRUCT_RETURNED", flush=True)
+        print("RFSOC4X2_RFDC_CONSTRUCT_RETURNED", flush=True)
         self.stages["overlay"] = True
 
     def open_mmio(self) -> None:
@@ -166,10 +170,13 @@ class Rfsoc4x2Driver:
         if self.reset_held is not True:
             raise RuntimeError("reset_hold() must succeed before loading firmware")
         data = Path(image_path).read_bytes()
-        if len(data) > self.map.mem_bytes or offset < 0 or offset + len(data) > self.map.mem_bytes:
+        if offset < 0 or offset % 4:
+            raise ValueError(f"image offset {offset:#x} must be nonnegative and word aligned")
+        if not data or len(data) % 4:
+            raise ValueError("firmware image must be nonempty and word aligned")
+        if len(data) > self.map.mem_bytes or offset + len(data) > self.map.mem_bytes:
             raise ValueError(f"image [{offset:#x}, {offset + len(data):#x}) outside core RAM")
-        padded = data + bytes((-len(data)) % 4)
-        words = [int.from_bytes(padded[i:i + 4], "little") for i in range(0, len(padded), 4)]
+        words = [int.from_bytes(data[i:i + 4], "little") for i in range(0, len(data), 4)]
         for index, word in enumerate(words):
             self.write32(self.map.imem(0) + offset + 4 * index, word)
         for index, word in enumerate(words):
@@ -177,7 +184,8 @@ class Rfsoc4x2Driver:
             if observed != word:
                 raise RuntimeError(f"firmware verify failed at {offset + 4 * index:#x}: "
                                    f"{observed:#010x} != {word:#010x}")
-        return {"bytes": len(data), "words": len(words), "sha256": _sha256(Path(image_path))}
+        return {"bytes": len(data), "words": len(words),
+                "sha256": hashlib.sha256(data).hexdigest()}
 
     def run_until(self, status_offset: int, mask: int, expected: int,
                   timeout_s: float) -> tuple[int, float]:
@@ -187,8 +195,8 @@ class Rfsoc4x2Driver:
         start = time.monotonic()
         deadline = start + float(timeout_s)
         status = self.read32(status_offset)
-        self.reset_release()
         try:
+            self.reset_release()
             while (status & mask) != expected:
                 if time.monotonic() >= deadline:
                     raise TimeoutError(f"status {status:#010x} did not reach "
