@@ -100,10 +100,12 @@ class Board:
         if not isinstance(document.get("params"), str):
             raise RuntimeError("board profile must name a host-side raw params file")
         if transport_factory is None:
-            raise RuntimeError("authenticated board transport is not installed until Phase 3")
+            from riscq.rpc_transport import create_rpc_transport
+            transport_factory = create_rpc_transport
         params_path = Path(document["params"])
         if not params_path.is_absolute():
             params_path = profile_path.parent / params_path
+        
         return cls(transport_factory(document), params_path.read_bytes())
 
     @property

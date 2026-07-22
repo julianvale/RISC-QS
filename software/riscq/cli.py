@@ -6,6 +6,13 @@ import argparse
 import json
 from pathlib import Path
 
+import os
+import secrets
+import subprocess
+import tempfile
+import zipfile
+from importlib import resources
+
 from riscq.build import compile_c
 from riscq.deployment.bundle import (create_firmware_bundle, create_platform_bundle,
                                      inspect_bundle)
@@ -63,9 +70,159 @@ def _inspect(args: argparse.Namespace) -> None:
     print(json.dumps(inspect_bundle(args.bundle), indent=2, sort_keys=True))
 
 
+def _board_provision(args: argparse.Namespace) -> None:
+    platform_path = Path(args.platform).resolve(strict=True)
+    ssh_target = args.ssh
+
+    # Locate board_check.c (supports both source checkout and package imports)
+    sw_root = Path(__file__).resolve().parent.parent
+    board_check_src = sw_root / "fw" / "board_check.c"
+    if not board_check_src.is_file():
+        # Fallback for installed package layout
+        try:
+            fw_pkg = resources.files("riscq.fw")
+            board_check_src = Path(str(fw_pkg.joinpath("board_check.c")))
+        except (AttributeError, TypeError, ImportError):
+            pass
+
+    if not board_check_src.is_file():
+        raise FileNotFoundError(f"Self-test source missing at {board_check_src}")
+        
+    print("Building board_check self-test bundle...")
+
+    with zipfile.ZipFile(platform_path, "r") as archive:
+        raw_params = archive.read("params.json")
+    
+    identity = raw_config_identity(raw_params)
+    image = compile_c(board_check_src.read_text(), SocMap(identity.params))
+    
+    # Extract endpoint (IP or hostname) from the SSH target
+    endpoint = ssh_target.split("@")[-1] if "@" in ssh_target else ssh_target
+    
+    # Locate host-side package service files dynamically
+    try:
+        deployment_pkg = resources.files("riscq.deployment")
+        service_py_path = Path(str(deployment_pkg.joinpath("service.py")))
+        systemd_unit_path = Path(str(deployment_pkg.joinpath("riscq-board.service")))
+    except (AttributeError, TypeError, ImportError):
+        deployment_dir = Path(__file__).parent / "deployment"
+        service_py_path = deployment_dir / "service.py"
+        systemd_unit_path = deployment_dir / "riscq-board.service"
+
+    if not service_py_path.is_file() or not systemd_unit_path.is_file():
+        raise FileNotFoundError("Missing service assets in riscq.deployment package.")
+
+    # Generate a cryptographically secure URL-safe pairing token
+    token = secrets.token_urlsafe(32)
+    
+    # Prepare host config directory (~/.config/riscq)
+    config_dir = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "riscq"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Save params.json locally for host API usage
+    params_dest = config_dir / "params.json"
+    print(f"Extracting raw params to {params_dest}...")
+    params_dest.write_bytes(raw_params)
+    
+    print(f"Provisioning {endpoint} with {platform_path.name}...")
+    
+    # Create temporary files for secure transfer
+    with tempfile.NamedTemporaryFile("w", delete=False) as token_file, \
+         tempfile.TemporaryDirectory() as tmp_dir:
+        
+        token_file.write(token)
+        token_tmp_path = token_file.name
+        
+        selftest_bundle_path = Path(tmp_dir) / "selftest.rqfw"
+        create_firmware_bundle(
+            selftest_bundle_path,
+            firmware_id="selftest",
+            version="1.0.0",
+            image=image.data,
+            symbols=image.symbols,
+            entry=image.entry,
+            requirements=identity.requirements(),
+            source={"kind": "c", "path": "board_check.c", "sha256": image.source_sha256},
+            runtime={"sha256": image.runtime_sha256},
+            toolchain=image.toolchain,
+        )
+
+        try:
+            print("Transferring platform bundle, token, self-test, and service files via scp...")
+            subprocess.run(["scp", str(platform_path), f"{ssh_target}:/tmp/{platform_path.name}"], check=True)
+            subprocess.run(["scp", token_tmp_path, f"{ssh_target}:/tmp/.riscq_token"], check=True)
+            subprocess.run(["scp", str(service_py_path), f"{ssh_target}:/tmp/service.py"], check=True)
+            subprocess.run(["scp", str(systemd_unit_path), f"{ssh_target}:/tmp/riscq-board.service"], check=True)
+            subprocess.run(["scp", str(selftest_bundle_path), f"{ssh_target}:/tmp/selftest.rqfw"], check=True)
+            
+            print("Configuring remote board and installing root service (enter remote sudo password if prompted)...")
+            setup_cmds = [
+                # Establish board filesystem structure
+                "sudo mkdir -p /opt/riscq/platforms /etc/riscq /var/lib/riscq/firmware",
+                "sudo chown root:root /opt/riscq/platforms /etc/riscq /var/lib/riscq/firmware",
+                "sudo chmod 700 /etc/riscq",
+                
+                # Ensure PYNQ virtualenv has required RPC packages installed
+                "sudo /usr/local/share/pynq-venv/bin/pip install --quiet Pyro5 serpent",
+
+                # Preflight import test
+                "sudo /usr/local/share/pynq-venv/bin/python3 -c 'import Pyro5, serpent, pynq, xrfclk, xrfdc; print(\"ENV_OK\")'",
+
+                # Move and secure platform bundle
+                f"sudo mv /tmp/{platform_path.name} /opt/riscq/platforms/",
+                f"sudo chown root:root /opt/riscq/platforms/{platform_path.name}",
+                f"sudo chmod 644 /opt/riscq/platforms/{platform_path.name}",
+                
+                # Move and secure self-test bundle
+                "sudo mv /tmp/selftest.rqfw /var/lib/riscq/firmware/selftest.rqfw",
+                "sudo chown root:root /var/lib/riscq/firmware/selftest.rqfw",
+                "sudo chmod 644 /var/lib/riscq/firmware/selftest.rqfw",
+                
+                # Move and secure pairing token
+                "sudo mv /tmp/.riscq_token /etc/riscq/token",
+                "sudo chown root:root /etc/riscq/token",
+                "sudo chmod 600 /etc/riscq/token",
+                
+                # Install RPC daemon script
+                "sudo mv /tmp/service.py /opt/riscq/service.py",
+                "sudo chown root:root /opt/riscq/service.py",
+                "sudo chmod 644 /opt/riscq/service.py",
+                
+                # Install, enable, and start systemd service
+                "sudo mv /tmp/riscq-board.service /etc/systemd/system/",
+                "sudo chown root:root /etc/systemd/system/riscq-board.service",
+                "sudo chmod 644 /etc/systemd/system/riscq-board.service",
+                "sudo systemctl daemon-reload",
+                "sudo systemctl enable riscq-board.service",
+                "sudo systemctl restart riscq-board.service"
+            ]
+            
+            subprocess.run(["ssh", "-t", ssh_target, " && ".join(setup_cmds)], check=True)
+        finally:
+            if os.path.exists(token_tmp_path):
+                os.remove(token_tmp_path)
+    
+    # Save host profile for Board.connect()
+    profile_path = config_dir / "board.json"
+    profile = {
+        "endpoint": endpoint,
+        "token": token,
+        "params": str(params_dest)
+    }
+    profile_path.write_text(json.dumps(profile, indent=2))
+    
+    print(f"Provisioning complete! Daemon active on board and local profile saved to {profile_path}")
+
 def parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(prog="riscq")
     commands = root.add_subparsers(dest="command", required=True)
+
+    board = commands.add_parser("board", help="board administration")
+    board_commands = board.add_subparsers(dest="board_command", required=True)
+    provision = board_commands.add_parser("provision", help="provision a board with a platform")
+    provision.add_argument("--ssh", required=True, help="xilinx@ADDRESS")
+    provision.add_argument("--platform", required=True, help="FILE.rqplatform")
+    provision.set_defaults(func=_board_provision)
 
     firmware = commands.add_parser("firmware", help="construct or inspect firmware bundles")
     fw_commands = firmware.add_subparsers(dest="firmware_command", required=True)

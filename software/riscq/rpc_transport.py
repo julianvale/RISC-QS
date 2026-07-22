@@ -1,0 +1,60 @@
+"""Authenticated Pyro5 RPC client transport factory for host-side Board connection."""
+
+from __future__ import annotations
+
+from typing import Any, Mapping
+import Pyro5.api
+import Pyro5.core
+
+
+class AuthenticatedRpcTransport:
+    """Client-side HostTransport implementation using Pyro5 HMAC authentication."""
+
+    def __init__(self, endpoint: str, token: str, port: int = 50000):
+        self._endpoint = endpoint
+        self._port = port
+        self._token = token
+        
+        # Configure Pyro5 HMAC authentication
+        Pyro5.config.REQUIRE_EXPOSE = True
+        Pyro5.config.COMMTIMEOUT = 5.0
+        Pyro5.config.HMAC_KEY = token.encode("utf-8")
+        
+        # Establish connection to the board's daemon
+        uri = f"PYRO:riscq.board@{endpoint}:{port}"
+        self._proxy = Pyro5.api.Proxy(uri)
+
+    def status(self) -> Mapping[str, Any]:
+        return dict(self._proxy.status())
+
+    def run_firmware(self, bundle: bytes, *, parameters: Mapping[str, int],
+                     results: list[str], timeout_s: float) -> Mapping[str, Any]:
+        return dict(self._proxy.run_firmware(
+            bundle, 
+            parameters=dict(parameters), 
+            results=list(results), 
+            timeout_s=float(timeout_s)
+        ))
+
+    def run_installed(self, name: str, version: str, *, parameters: Mapping[str, int],
+                      results: list[str], timeout_s: float) -> Mapping[str, Any]:
+        return dict(self._proxy.run_installed(
+            str(name), 
+            str(version), 
+            parameters=dict(parameters), 
+            results=list(results), 
+            timeout_s=float(timeout_s)
+        ))
+
+    def self_test(self, *, timeout_s: float) -> Mapping[str, Any]:
+        # Uses empty bundle bytes; board service handles default self-test internally
+        return dict(self._proxy.self_test(b"", timeout_s=float(timeout_s)))
+
+
+def create_rpc_transport(profile_doc: dict[str, Any]) -> AuthenticatedRpcTransport:
+    """Transport factory passed to Board.connect()."""
+    endpoint = profile_doc.get("endpoint")
+    token = profile_doc.get("token")
+    if not endpoint or not token:
+        raise RuntimeError("Board profile missing required 'endpoint' or 'token' fields.")
+    return AuthenticatedRpcTransport(endpoint, token)

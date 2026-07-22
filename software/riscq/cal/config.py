@@ -8,7 +8,7 @@ Every value is in PHYSICAL units — Hz, seconds, normalized amplitude in [-1, 1
 batches and hardware codes are derived inside a calibration's `run()`, never stored.
 
 `from_qcal` / `save_qcal` are the one-way adapter to the qcal YAML tree (the artefact of record —
-`build/qcal-x6y3-config/config.yaml`): `from_qcal` maps it into our paths, `save_qcal` writes the
+an explicit caller-provided qcal YAML file): `from_qcal` maps it into our paths, `save_qcal` writes the
 calibrated fields back into the loaded tree and leaves everything else (two-qubit gates, EF, reset
 pulses) untouched. Nothing else in the stack knows qcal's layout.
 """
