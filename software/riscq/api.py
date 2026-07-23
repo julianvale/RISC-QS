@@ -123,7 +123,8 @@ class Board:
         return status
 
     def compile_c(self, source: str | Path, *, name: str | None = None,
-                  version: str | None = None) -> Firmware:
+                  version: str | None = None,
+                  assets: Mapping[str, bytes] | None = None) -> Firmware:
         path = Path(source) if isinstance(source, Path) or "\n" not in str(source) else None
         try:
             is_file = path is not None and path.is_file()
@@ -149,9 +150,9 @@ class Board:
             source={"sha256": source_digest, "kind": "c"},
             runtime={"sha256": image.runtime_sha256 or "0" * 64},
             toolchain=image.toolchain,
+            assets=assets,
         )
         return Firmware(data, load_firmware_bundle(data).manifest)
-
     def run(self, firmware: Firmware | str | Path | bytes, *,
             parameters: Mapping[str, int] | None = None, results: list[str] | None = None,
             timeout_s: float = 1.0) -> Mapping[str, Any]:

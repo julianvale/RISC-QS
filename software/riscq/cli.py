@@ -175,7 +175,8 @@ def _board_provision(args: argparse.Namespace) -> None:
             "sudo chmod 700 /etc/riscq",
             
             # Install completely offline from the transferred wheels directory
-            "sudo /usr/local/share/pynq-venv/bin/pip install --quiet --no-index --find-links=/tmp/wheels riscq Pyro5 serpent",
+            "sudo /usr/local/share/pynq-venv/bin/pip install --quiet --no-index --force-reinstall --no-deps --find-links=/tmp/wheels riscq",
+            "sudo /usr/local/share/pynq-venv/bin/pip install --quiet --no-index --find-links=/tmp/wheels Pyro5 serpent",
             "sudo rm -rf /tmp/wheels",
 
             "sudo BOARD=RFSoC4x2 /usr/local/share/pynq-venv/bin/python3 -c 'import riscq, Pyro5, serpent, pynq, xrfclk, xrfdc; print(\"ENV_OK\")'",
