@@ -95,9 +95,14 @@ def _parse_nm(text: str) -> dict[str, tuple[int, int]]:
         parts = line.split()
         if len(parts) == 4:
             addr, size, _, name = parts
+            # Ignore LLVM mapping symbols ($d, $x, etc.) and internal labels (.L...)
+            if name.startswith("$") or name.startswith("."):
+                continue
             symbols[name] = (int(addr, 16), int(size, 16))
         elif len(parts) == 3:
             addr, _, name = parts
+            if name.startswith("$") or name.startswith("."):
+                continue
             symbols[name] = (int(addr, 16), 0)
     return symbols
 

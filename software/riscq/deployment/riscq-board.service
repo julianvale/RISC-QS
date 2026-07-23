@@ -7,6 +7,8 @@ Type=simple
 # Must run as root to access /dev/mem for MMIO and PYNQ drivers
 User=root
 # Execute using the board's PYNQ virtual environment
+Environment="XILINX_XRT=/usr"
+Environment="BOARD=RFSoC4x2"
 ExecStart=/usr/local/share/pynq-venv/bin/python3 -u /opt/riscq/service.py
 Restart=on-failure
 RestartSec=5

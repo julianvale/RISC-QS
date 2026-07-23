@@ -95,7 +95,7 @@ class Board:
             document = json.loads(profile_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"cannot read default board profile {profile_path}: {exc}") from exc
-        if not isinstance(document, dict) or set(document) - {"endpoint", "params"}:
+        if not isinstance(document, dict) or set(document) - {"endpoint", "params", "token"}:
             raise RuntimeError("board profile has unsupported fields")
         if not isinstance(document.get("params"), str):
             raise RuntimeError("board profile must name a host-side raw params file")

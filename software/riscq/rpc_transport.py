@@ -4,25 +4,23 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 import Pyro5.api
-import Pyro5.core
 
 
 class AuthenticatedRpcTransport:
-    """Client-side HostTransport implementation using Pyro5 HMAC authentication."""
+    """Client-side HostTransport implementation using Pyro5 Handshake authentication."""
 
     def __init__(self, endpoint: str, token: str, port: int = 50000):
         self._endpoint = endpoint
         self._port = port
         self._token = token
         
-        # Configure Pyro5 HMAC authentication
-        Pyro5.config.REQUIRE_EXPOSE = True
-        Pyro5.config.COMMTIMEOUT = 5.0
-        Pyro5.config.HMAC_KEY = token.encode("utf-8")
-        
-        # Establish connection to the board's daemon
+        # Connect to the board daemon via Pyro5 Proxy
         uri = f"PYRO:riscq.board@{endpoint}:{port}"
         self._proxy = Pyro5.api.Proxy(uri)
+        
+        # Pyro5 connection handshake token
+        self._proxy._pyroHandshake = token
+        self._proxy._pyroTimeout = 5.0
 
     def status(self) -> Mapping[str, Any]:
         return dict(self._proxy.status())
@@ -47,7 +45,6 @@ class AuthenticatedRpcTransport:
         ))
 
     def self_test(self, *, timeout_s: float) -> Mapping[str, Any]:
-        # Uses empty bundle bytes; board service handles default self-test internally
         return dict(self._proxy.self_test(b"", timeout_s=float(timeout_s)))
 
 
