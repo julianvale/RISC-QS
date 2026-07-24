@@ -53,5 +53,10 @@ def create_rpc_transport(profile_doc: dict[str, Any]) -> AuthenticatedRpcTranspo
     endpoint = profile_doc.get("endpoint")
     token = profile_doc.get("token")
     if not endpoint or not token:
-        raise RuntimeError("Board profile missing required 'endpoint' or 'token' fields.")
-    return AuthenticatedRpcTransport(endpoint, token)
+        raise RuntimeError(
+            "Phase 3 authenticated transport requires board profile 'endpoint' and 'token' fields."
+        )
+    port = profile_doc.get("port", 50000)
+    if not isinstance(port, int) or isinstance(port, bool) or not 1 <= port <= 65535:
+        raise RuntimeError("board profile port is invalid")
+    return AuthenticatedRpcTransport(endpoint, token, port=port)

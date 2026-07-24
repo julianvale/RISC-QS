@@ -11,7 +11,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from riscq.build import Image, compile_c
 from riscq.deployment.bundle import (VerifiedBundle, firmware_bundle_bytes,
-                                     load_firmware_bundle)
+                                     EnvelopeAsset, load_firmware_bundle)
 from riscq.deployment.identity import raw_config_identity
 from riscq.map import SocMap
 
@@ -95,7 +95,7 @@ class Board:
             document = json.loads(profile_path.read_text())
         except (OSError, json.JSONDecodeError) as exc:
             raise RuntimeError(f"cannot read default board profile {profile_path}: {exc}") from exc
-        if not isinstance(document, dict) or set(document) - {"endpoint", "params", "token"}:
+        if not isinstance(document, dict) or set(document) - {"endpoint", "params", "token", "port"}:
             raise RuntimeError("board profile has unsupported fields")
         if not isinstance(document.get("params"), str):
             raise RuntimeError("board profile must name a host-side raw params file")
@@ -124,7 +124,7 @@ class Board:
 
     def compile_c(self, source: str | Path, *, name: str | None = None,
                   version: str | None = None,
-                  assets: Mapping[str, bytes] | None = None) -> Firmware:
+                  assets: Mapping[str, bytes | EnvelopeAsset] | None = None) -> Firmware:
         path = Path(source) if isinstance(source, Path) or "\n" not in str(source) else None
         try:
             is_file = path is not None and path.is_file()

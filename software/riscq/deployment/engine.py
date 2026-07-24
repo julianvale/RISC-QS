@@ -224,12 +224,25 @@ class DeploymentEngine:
             raise DeploymentError(f"active platform identity mismatch: {observed!r} != {expected!r}")
         self._platform_verified = True
 
+    def _validate_assets(self, bundle: VerifiedBundle) -> None:
+        layout = bundle.manifest["asset_layout"]
+        for asset_name in bundle.manifest["assets"]:
+            record = layout[asset_name]
+            channel = int(record["channel"])
+            line = int(record["line"])
+            if line < 0:
+                raise BundleError(f"asset {asset_name!r} line must be nonnegative")
+            info = self.soc_map.channel(channel)
+            data = bundle.files[asset_name]
+            if len(data) % info.line_bytes:
+                raise BundleError(f"asset {asset_name!r} is not a whole number of channel lines")
+            if line + len(data) // info.line_bytes > self.soc_map.params.env_depth:
+                raise BundleError(f"asset {asset_name!r} exceeds envelope RAM depth")
+
     def load(self, source: VerifiedBundle | str | bytes) -> VerifiedBundle:
-        import sys
-        print(">>> ENGINE LOAD CALLED <<<", flush=True)
-        sys.stderr.flush()
         bundle = self._firmware(source)  # all identity checks precede adapter calls
         symbols = _symbols(bundle, self.soc_map.mem_bytes)
+        self._validate_assets(bundle)
         image = bundle.files["firmware.bin"]
         expected_hash = str(bundle.manifest["image"]["sha256"])
         if sha256_bytes(image) != expected_hash:
@@ -252,30 +265,20 @@ class DeploymentEngine:
                         f"{observed:#010x} != {word:#010x}"
                     )
                 
-            def _resolve_env_addr(attr_names: list[str], default_offset: int) -> int:
-                for attr in attr_names:
-                    if hasattr(self.soc_map, attr):
-                        val = getattr(self.soc_map, attr)
-                        if isinstance(val, int):
-                            return val # Just return the raw offset (e.g., 0x10000)
-                return default_offset
-
-            asset_map = {
-                "assets/gate_env.bin": _resolve_env_addr(["gate_env", "gate_env_base"], 0x10000),
-                "assets/demod_env.bin": _resolve_env_addr(["demod_env_base", "demod_env"], 0x30000),
-            }
-
-            for asset_name, target_addr in asset_map.items():
-                if asset_name in bundle.files:
-                    data = bundle.files[asset_name]
-                    for i in range(0, len(data), 4):
-                        w = int.from_bytes(data[i:i + 4], "little")
-                        self.adapter.write_word(target_addr + i, w)
-
-            # Check address 0x00010000 (GATE_ENV base)
-            word0 = self.adapter.read_word(0x00010000)
-            print(f"GATE_ENV word 0: {word0:#010x}", flush=True)  # Will be 0x00000000 if not written!
-            sys.stderr.flush()
+            layout = bundle.manifest["asset_layout"]
+            for asset_name in bundle.manifest["assets"]:
+                record = layout[asset_name]
+                channel = int(record["channel"])
+                line = int(record["line"])
+                info = self.soc_map.channel(channel)
+                data = bundle.files[asset_name]
+                if len(data) % info.line_bytes:
+                    raise BundleError(f"asset {asset_name!r} is not a whole number of channel lines")
+                lines = len(data) // info.line_bytes
+                target_addr = self.soc_map.env_base(channel, 0) + line * info.line_bytes
+                for index in range(0, len(data), 4):
+                    self.adapter.write_word(target_addr + index,
+                                             int.from_bytes(data[index:index + 4], "little"))
 
             magic = self.adapter.read_word(self._host_address(symbols["__rq_magic"]))
             if magic != MAGIC:

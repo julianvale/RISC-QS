@@ -1,4 +1,5 @@
 from riscq import Board
+from riscq.deployment import EnvelopeAsset
 import numpy as np
 import math
 
@@ -27,8 +28,8 @@ def main():
         name="loopback_test",
         version="1.0.0",
         assets={
-            "assets/gate_env.bin": gate_env_bytes,
-            "assets/demod_env.bin": demod_env_bytes,
+            "assets/gate_env.bin": EnvelopeAsset(gate_env_bytes, channel=0, line=0),
+            "assets/demod_env.bin": EnvelopeAsset(demod_env_bytes, channel=2, line=0),
         }
     )
 

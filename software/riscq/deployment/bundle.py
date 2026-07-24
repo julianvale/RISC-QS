@@ -31,6 +31,15 @@ class BundleError(ValueError):
 
 
 @dataclass(frozen=True)
+class EnvelopeAsset:
+    """An envelope payload and its manifest-defined RF channel placement."""
+
+    data: bytes
+    channel: int
+    line: int
+
+
+@dataclass(frozen=True)
 class VerifiedBundle:
     kind: str
     manifest: dict[str, Any]
@@ -322,7 +331,7 @@ def firmware_bundle_bytes(*, firmware_id: str, version: str, image: bytes,
                           symbols: Mapping[str, tuple[int, int] | list[int]], entry: int,
                           requirements: Mapping[str, str], source: Mapping[str, Any],
                           runtime: Mapping[str, Any], toolchain: Mapping[str, Any],
-                          assets: Mapping[str, bytes] | None = None) -> bytes:
+                          assets: Mapping[str, bytes | EnvelopeAsset] | None = None) -> bytes:
     _validate_firmware_provenance(source, runtime, toolchain)
     _require_id(firmware_id, "firmware_id")
     _require_id(version, "version")
@@ -333,11 +342,18 @@ def firmware_bundle_bytes(*, firmware_id: str, version: str, image: bytes,
         "firmware.bin": image,
         "symbols.json": canonical_json_bytes(symbol_doc),
     }
-    for name, data in sorted((assets or {}).items()):
+    asset_layout: dict[str, dict[str, int]] = {}
+    for name, asset in sorted((assets or {}).items()):
         _safe_name(name)
         if not name.startswith("assets/") or name in payloads:
             raise BundleError("optional firmware assets must live under assets/")
-        payloads[name] = bytes(data)
+        if not isinstance(asset, EnvelopeAsset):
+            raise BundleError(f"asset {name!r} must declare EnvelopeAsset placement")
+        if (not isinstance(asset.channel, int) or isinstance(asset.channel, bool)
+                or not isinstance(asset.line, int) or isinstance(asset.line, bool)):
+            raise BundleError(f"asset {name!r} has invalid placement")
+        payloads[name] = bytes(asset.data)
+        asset_layout[name] = {"channel": asset.channel, "line": asset.line}
     required_identity = {key: _require_hex(requirements.get(key), key)
                          for key in ("params_digest", "map_digest", "abi_digest")}
     manifest: dict[str, Any] = {
@@ -351,6 +367,7 @@ def firmware_bundle_bytes(*, firmware_id: str, version: str, image: bytes,
         "runtime": dict(runtime),
         "toolchain": dict(toolchain),
         "assets": sorted(name for name in payloads if name.startswith("assets/")),
+        "asset_layout": asset_layout,
         "files": _file_records(payloads, sorted(payloads)),
     }
     return _deterministic_zip({**payloads, "manifest.json": canonical_json_bytes(manifest)})
@@ -364,7 +381,7 @@ def load_firmware_bundle(source: str | Path | bytes) -> VerifiedBundle:
     files = _load_zip(source)
     manifest = _manifest(files)
     required_keys = {"format", "id", "version", "image", "requires", "source",
-                     "runtime", "toolchain", "assets", "files"}
+                     "runtime", "toolchain", "assets", "asset_layout", "files"}
     if set(manifest) != required_keys or manifest.get("format") != FIRMWARE_FORMAT:
         raise BundleError("malformed firmware manifest schema")
     _require_id(manifest["id"], "id")
@@ -393,6 +410,16 @@ def load_firmware_bundle(source: str | Path | bytes) -> VerifiedBundle:
         _safe_name(name)
         if not name.startswith("assets/"):
             raise BundleError("firmware asset is outside assets/")
+    layout = manifest["asset_layout"]
+    if (not isinstance(layout, dict) or set(layout) != set(assets)):
+        raise BundleError("asset_layout must contain exactly one record per asset")
+    # Placement is checked against the platform map before any adapter access by the engine.
+    for name in assets:
+        record = layout[name]
+        if (not isinstance(record, dict) or set(record) != {"channel", "line"}
+                or any(not isinstance(record[key], int) or isinstance(record[key], bool)
+                       for key in ("channel", "line"))):
+            raise BundleError(f"malformed asset layout for {name!r}")
     allowed = {"manifest.json", "firmware.bin", "symbols.json", *assets}
     _verify_records(manifest, files, allowed)
     image = files["firmware.bin"]
