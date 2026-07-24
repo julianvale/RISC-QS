@@ -97,7 +97,7 @@ class BoardServer:
     # per batch (spec 08 §5). poll_done takes its hardware branch (no `.sim` here). ──
 
     @_locked
-    def remote_setup(self, params_json, progmap):
+    def remote_setup(self, params_json, progmap, timeout_s=None):
         from riscq import run as _run
         from riscq.map import SocMap, SocParams
 
@@ -112,14 +112,14 @@ class BoardServer:
         return None
 
     @_locked
-    def remote_rerun(self, cores, params, arrays, results, timeout):
+    def remote_rerun(self, cores, params, arrays, results, timeout, timeout_s=None):
         from riscq import run as _run
         progs = {int(c): self._progs[int(c)] for c in cores}
         out = _run.rerun(self._driver(), self._m, progs,
                          params={int(c): v for c, v in dict(params).items()},
                          arrays={int(c): v for c, v in dict(arrays).items()},
                          results=(None if results is None else list(results)),
-                         timeout=int(timeout))
+                         timeout=int(timeout), timeout_s=timeout_s)
         return {c: {n: bytes(a.astype("<i4").tobytes()) for n, a in d.items()}
                 for c, d in out.items()}
 

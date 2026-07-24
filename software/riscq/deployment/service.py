@@ -11,8 +11,10 @@ import Pyro5.errors
 import serpent
 
 from riscq.board.rfsoc4x2_validation import validate_rfdc_health
-from riscq.deployment.bundle import load_platform_bundle
+from riscq.deployment.bundle import BundleError, load_platform_bundle
 from riscq.deployment.engine import DeploymentEngine, adapter_for
+from riscq.deployment.program import (Rfsoc4x2ProgramAdapter, validate_program_identity,
+                                       validate_program_wire)
 
 
 PLATFORMS_DIR = Path("/opt/riscq/platforms")
@@ -56,6 +58,8 @@ class RiscqBoardService:
         self._engine = engine
         self._firmware_dir = Path(firmware_dir)
         self._lock = threading.RLock()
+        self._program_map = None
+        self._program_driver = None
 
     def status(self) -> dict:
         return {"ready": True, "platform": self._engine.identity}
@@ -83,6 +87,49 @@ class RiscqBoardService:
         with self._lock:
             return self._engine.run(target.read_bytes(), results=["__rq_status"],
                                     timeout_s=timeout_s)
+
+    def program_setup(self, params_json: str, progmap: dict, timeout_s: float | None = None):
+        """Load one restricted RFSoC4x2 Program map; core 0 is the only accepted core."""
+        if timeout_s is not None and (not isinstance(timeout_s, (int, float)) or timeout_s <= 0):
+            raise ValueError("timeout_s must be positive")
+        with self._lock:
+            try:
+                if not isinstance(progmap, dict) or set(map(int, progmap)) != {0}:
+                    raise ValueError("RFSoC4x2 Program setup requires core 0 only")
+                m = validate_program_identity(params_json, self._engine.platform)
+                wire = progmap[0] if 0 in progmap else progmap["0"]
+                validate_program_wire(wire, m)
+                from riscq import run as _run
+                program = _run._prog_from_wire(wire)
+                driver = getattr(self._engine.adapter, "driver", None)
+                if driver is None:
+                    raise RuntimeError("RFSoC4x2 Program adapter is unavailable")
+                adapter = Rfsoc4x2ProgramAdapter(driver, m)
+                self._engine.verify_active_platform()
+                _run.setup(adapter, m, {0: program})
+                # Publish only after the complete setup has succeeded.
+                self._program_map = {0: program}
+                self._program_driver = adapter
+                return None
+            except BundleError as exc:
+                # Pyro's serpent serializer safely carries built-ins, not local exception classes.
+                raise ValueError(str(exc)) from None
+
+    def program_rerun(self, cores, params, arrays, results, timeout, timeout_s):
+        if not isinstance(timeout_s, (int, float)) or timeout_s <= 0:
+            raise ValueError("RFSoC4x2 Program rerun requires a positive timeout_s")
+        with self._lock:
+            if self._program_map is None or self._program_driver is None:
+                raise RuntimeError("Program setup has not succeeded")
+            if set(map(int, cores)) != {0}:
+                raise ValueError("RFSoC4x2 Program rerun requires core 0 only")
+            from riscq import run as _run
+            out = _run.rerun(self._program_driver, self._engine.soc_map,
+                             {0: self._program_map[0]}, params=dict(params), arrays=dict(arrays),
+                             results=None if results is None else list(results),
+                             timeout=int(timeout), timeout_s=float(timeout_s))
+            return {0: {name: bytes(array.astype("<i4").tobytes())
+                        for name, array in out[0].items()}}
 
 
 def startup_sequence(config: dict | None = None):

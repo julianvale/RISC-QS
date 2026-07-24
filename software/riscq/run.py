@@ -227,7 +227,10 @@ def setup(drv, m: SocMap, progs: dict[int, Program]) -> None:
     object present, the whole load runs server-side in one RPC (spec 08 §5)."""
     remote = getattr(drv, "remote", None)
     if remote is not None:
-        remote.setup(_params_json(m), {core: _prog_to_wire(prog) for core, prog in progs.items()})
+        # ProgramDriver retains the profile's exact raw JSON.  Generic legacy drivers only have
+        # SocParams, so preserve their normalized compatibility handshake.
+        params_json = getattr(drv, "_raw_params_json", None) or _params_json(m)
+        remote.setup(params_json, {core: _prog_to_wire(prog) for core, prog in progs.items()})
         return
     reset(drv, m, on=True)
     try:
@@ -258,7 +261,8 @@ def rerun(drv, m: SocMap, progs: dict[int, Program],
     the whole batch (params + arrays in, poll, results out) runs server-side in one RPC (spec 08 §5)."""
     remote = getattr(drv, "remote", None)
     if remote is not None:
-        raw = remote.rerun(list(progs), params or {}, arrays or {}, results, timeout)
+        raw = remote.rerun(list(progs), params or {}, arrays or {}, results, timeout,
+                            timeout_s=timeout_s)
         return {int(core): {name: np.frombuffer(buf, dtype="<i4").copy() for name, buf in d.items()}
                 for core, d in raw.items()}
     params = params or {}

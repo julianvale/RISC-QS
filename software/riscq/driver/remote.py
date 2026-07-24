@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
 
 import Pyro5.api
@@ -77,6 +78,76 @@ class RemoteDriver:
 
     def close(self) -> None:
         self._proxy._pyroRelease()
+
+
+class _ProgramRpcExtras:
+    """The only remote surface exposed by the RFSoC4x2 ProgramDriver."""
+
+    def __init__(self, transport):
+        self._transport = transport
+
+    def setup(self, params_json: str, progmap: dict, timeout_s: float | None = None):
+        return self._transport.program_setup(params_json, progmap, timeout_s=timeout_s)
+
+    def rerun(self, cores, params, arrays, results, timeout, timeout_s=None):
+        if timeout_s is None or timeout_s <= 0:
+            raise ValueError("RFSoC4x2 Program rerun requires a positive timeout_s")
+        raw = self._transport.program_rerun(cores, params, arrays, results, timeout,
+                                            timeout_s=float(timeout_s))
+        return {int(c): {n: _to_bytes(b) for n, b in d.items()} for c, d in raw.items()}
+
+
+class ProgramDriver:
+    """Profile-backed, restricted RFSoC4x2 Driver for the Python DSL.
+
+    It intentionally has no four-operation Driver methods: ``risq.run`` sees only ``remote``
+    and sends one authenticated setup/rerun request per batch.
+    """
+
+    def __init__(self, transport, soc_map, raw_params_json: str):
+        self.remote = _ProgramRpcExtras(transport)
+        self.map = soc_map
+        self._transport = transport
+        self._raw_params_json = raw_params_json
+
+    @classmethod
+    def connect(cls, profile: str | Path | None = None, *, transport_factory=None):
+        if profile is None:
+            root = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+            profile = root / "riscq" / "board.json"
+        profile_path = Path(profile)
+        try:
+            document = json.loads(profile_path.read_text())
+        except (OSError, json.JSONDecodeError) as exc:
+            raise RuntimeError(f"cannot read board profile {profile_path}: {exc}") from exc
+        if not isinstance(document, dict) or set(document) - {"endpoint", "params", "token", "port"}:
+            raise RuntimeError("board profile has unsupported fields")
+        if not isinstance(document.get("params"), str):
+            raise RuntimeError("board profile must name a host-side raw params file")
+        params_path = Path(document["params"])
+        if not params_path.is_absolute():
+            params_path = profile_path.parent / params_path
+        raw = params_path.read_bytes()
+        from riscq.deployment.identity import raw_config_identity
+        identity = raw_config_identity(raw)
+        if identity.platform_id != "rfsoc4x2-nv-1q" or identity.params.qubit_num != 1:
+            raise RuntimeError("ProgramDriver.connect requires the accepted one-core RFSoC4x2 profile")
+        if transport_factory is None:
+            from riscq.rpc_transport import create_rpc_transport
+            transport_factory = create_rpc_transport
+        transport = transport_factory(document)
+        status = dict(transport.status())
+        platform = status.get("platform", {})
+        for key, value in {"id": identity.platform_id, **identity.requirements()}.items():
+            if platform.get(key) != value:
+                raise RuntimeError(f"board status {key} does not match host profile")
+        return cls(transport, __import__("riscq.map", fromlist=["SocMap"]).SocMap(identity.params),
+                   raw.decode("utf-8"))
+
+    def close(self):
+        close = getattr(self._transport, "close", None)
+        if close is not None:
+            close()
 
 
 def upload_bundle(drv: RemoteDriver, name: str, xsa: str | Path, params_json: str | Path,

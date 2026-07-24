@@ -47,6 +47,13 @@ class AuthenticatedRpcTransport:
     def self_test(self, *, timeout_s: float) -> Mapping[str, Any]:
         return dict(self._proxy.self_test(b"", timeout_s=float(timeout_s)))
 
+    def program_setup(self, params_json: str, progmap: dict, *, timeout_s: float | None = None):
+        return self._proxy.program_setup(params_json, progmap, timeout_s=timeout_s)
+
+    def program_rerun(self, cores, params, arrays, results, timeout, *, timeout_s: float):
+        return self._proxy.program_rerun(list(cores), dict(params), dict(arrays), results,
+                                         int(timeout), float(timeout_s))
+
 
 def create_rpc_transport(profile_doc: dict[str, Any]) -> AuthenticatedRpcTransport:
     """Transport factory passed to Board.connect()."""

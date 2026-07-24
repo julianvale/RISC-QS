@@ -224,6 +224,10 @@ class DeploymentEngine:
             raise DeploymentError(f"active platform identity mismatch: {observed!r} != {expected!r}")
         self._platform_verified = True
 
+    def verify_active_platform(self) -> None:
+        """Run the shared fail-closed active-platform readiness check."""
+        self._verify_active_platform()
+
     def _validate_assets(self, bundle: VerifiedBundle) -> None:
         layout = bundle.manifest["asset_layout"]
         for asset_name in bundle.manifest["assets"]:
