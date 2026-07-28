@@ -1,39 +1,56 @@
-# riscq control software
+# RISC-Q supported software
 
-The Python package for the riscq PulseTableSoc: kernel compiler (`riscq.lang`), build/run layers
-(`riscq.build`/`riscq.run`), driver backends (`riscq.driver`), co-sim (`riscq.sim`), calibrations
-(`riscq.cal`), and the ZCU216 board side (`riscq.board`). Design of record:
-[specs/software/](../specs/software/README.md).
+`software/riscq`, `software/fw`, and `software/tests` are the only supported implementation. The
+retained `software/python/.gitignore` and `software/firmware/.gitignore` protect local generated
+state; those directories are not package or runtime inputs.
 
-## Install
+## RFSoC deployment boundary
 
-Host (dev machine): `pip install -e .[cal]` — scipy is the `cal` extra (fit helpers only);
-the co-sim additionally needs the dev environment's cocotb + verilator + riscv-gcc.
+The host-only deployment foundation is grouped under `riscq.deployment`:
 
-## Board install (offline, spec 10 §2)
+- `riscq/deployment/identity.py` binds the complete raw configuration plus map and firmware ABI.
+- `riscq/deployment/bundle.py` creates and verifies deterministic `.rqplatform` and `.rqfw` files.
+- `riscq/deployment/engine.py` provides explicit RFSoC4x2/ZCU216 adapters and reset-safe execution.
+- `riscq/api.py` exports the public `Board` facade; it exposes no raw MMIO, shell, board-side Python,
+  filesystem, or runtime platform-replacement operations.
 
-The ZCU216 ARM runs the same wheel with only numpy + Pyro5 (already-shipped PYNQ packages
-`pynq`/`xrfclk`/`xrfdc` are used but never pip-installed). The board has no internet:
+RFSoC4x2-specific product assets are easy to identify:
+
+- raw configuration: `configs/rfsoc4x2-nv-1q.json`
+- accepted release: `platforms/rfsoc4x2-nv-1q/1.0.0/`
+- validation firmware: `fw/rfsoc4x2_*.c` and `fw/board_check.c`
+- validation tests: `tests/test_rfsoc4x2_*.py`
+
+The ZCU216 implementation remains explicit in `riscq/board/pynq_driver.py` and
+`configs/zcu216-14q.json`; RFSoC4x2 never inherits its MTS, Nyquist, or DAC-current startup behavior.
+
+For the complete existing ZCU216 path—from the Vivado XSA through local PYNQ operation or the
+preserved `riscq-board-server`/`RemoteDriver` deployment—follow
+[`docs/software/11-zcu216-setup.md`](../docs/software/11-zcu216-setup.md).
+
+## RFSoC4x2 host commands
 
 ```bash
-# on a connected machine (numpy is already on the PYNQ image)
-pip download riscq Pyro5 serpent -d wheels/        # or: pip wheel . -w wheels/ from this dir
-scp -r wheels/ xilinx@<board>:
-
-# on the board
-pip install --no-index --find-links wheels/ riscq
+python -m venv .venv
+. .venv/bin/activate
+pip install './software[test]'
+riscq firmware inspect experiment.rqfw
+riscq platform inspect software/platforms/rfsoc4x2-nv-1q/1.0.0/rfsoc4x2-nv-1q-1.0.0.rqplatform
 ```
 
-`tests/test_packaging.py` gates this in CI: the board module surface must import with only
-numpy + Pyro5 installed.
-
-## Board server
+Firmware construction requires an RV32-capable clang plus objcopy and nm:
 
 ```bash
-riscq-board-server [--bits ~/riscq-bits] [--bundle <name>] [--host 0.0.0.0] [--port 9091]
-# → riscq board server @ PYRO:riscq.board@0.0.0.0:9091   (bundle: <name>)
+riscq firmware build experiment.c --name experiment --version 1.0.0 \
+  --params software/configs/rfsoc4x2-nv-1q.json --output experiment.rqfw
 ```
 
-Gateware reaches the board as a **bundle** (`top.xsa` + `params.json` + optional `board.json`)
-uploaded over the same Pyro5 connection — `riscq.driver.remote.upload_bundle(drv, name, ...)`,
-then `drv.board.load(name)`. See [specs/software/10-hardware-driver.md](../specs/software/10-hardware-driver.md).
+Platform developers can package already-built bytes with `riscq platform package`; the command
+does not run Vivado or program hardware. Existing output files are never overwritten.
+
+The RFSoC4x2 workflow is one trusted host directly connected to one board: provision the accepted
+platform, pairing token, configured private-link service, and boot self-test, then use
+`Board.connect()` or `riscq firmware run`. The token and bind address protect against accidental use
+of the wrong interface, not a full multi-user security model. Existing platform, self-test,
+configuration, and profile files are never overwritten unless `--replace` is explicit. This does not
+change the separate ZCU216 workflow documented above.

@@ -23,7 +23,8 @@ MODULATION_CYCLES = 21
 CARRIER_HZ = 80e6
 PULSE_BATCHES = 2458
 LOW_AMP_CODE = 3276
-LOW_AMP = LOW_AMP_CODE / units.AMP_SCALE
+MEDIUM_AMP_CODE = 7000
+LOW_AMP = MEDIUM_AMP_CODE / units.AMP_SCALE
 SCHEDULE_LEAD = 2048
 
 
@@ -90,7 +91,7 @@ def main(argv=None):
     result = run_aom_am(args.profile, args.timeout_s)
     modulation = MODULATION_CYCLES * 491_520_000.0 / ENV_LINES
     print(f"carrier={CARRIER_HZ:g} Hz modulation={modulation:g} Hz "
-          f"amplitude_code={LOW_AMP_CODE} result={result.tolist()}")
+          f"amplitude_code={MEDIUM_AMP_CODE} result={result.tolist()}")
 
 
 if __name__ == "__main__":

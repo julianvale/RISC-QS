@@ -4,18 +4,24 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "riscq"
-version = "0.1.0"
+version = "0.1.1"
 description = "Control software for the riscq PulseTableSoc"
 requires-python = ">=3.10"
-dependencies = ["numpy", "Pyro5"]
+dependencies = ["numpy", "Pyro5", "PyYAML"]
 
 # scipy is host-side only (riscq.cal.fits); the offline board install stays numpy+Pyro5 (spec 10 §2)
 [project.optional-dependencies]
 cal = ["scipy"]
+cosim = ["cocotb>=1.9,<2.0"]
+test = ["pytest", "scipy", "cocotb>=1.9,<2.0", "qutip"]
 
 [project.scripts]
+riscq = "riscq.cli:main"
 riscq-board-server = "riscq.board.server:main"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["riscq*"]
+
+[tool.setuptools.package-data]
+"riscq.deployment" = ["riscq-board.service"]
