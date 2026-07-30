@@ -21,7 +21,7 @@ case class laser_out() extends BlackBox {
         val d_out = out Bool()
     }
     noIoPrefix()
-    val sourceCode = Source.fromFile("src/riscq/digital/laser_out.sv").mkString
+    val sourceCode = Source.fromFile("src/riscq/digital/laser_out.v").mkString
     setInlineVerilog(sourceCode)
 }
 

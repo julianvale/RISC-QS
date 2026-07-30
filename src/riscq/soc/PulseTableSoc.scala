@@ -172,7 +172,7 @@ case class PulseTableSoc(
         time = coreTimes(i), batchSize = N, dataWidth = w, adcBatch = adcBatch,
         envDepth = envDepth, readoutInterp = readoutInterp, gateInterp = gateInterp, demodInterp = demodInterp,
         linkPipe = linkPipe, withTestTap = withTest, memDepth = memDepth, gatePulseNum = gatePulseNum,
-        queueDepth = queueDepth, ownsLaser = (i==1)))
+        queueDepth = queueDepth, ownsLaser = (i==0)))
 
     // floorplan: keep each core's RiscvSoc a hard synth boundary so opt can't merge logic across the
     // identical cores into a MUXF7/F8 macro that straddles two per-core pblocks. The shared host AXI fans

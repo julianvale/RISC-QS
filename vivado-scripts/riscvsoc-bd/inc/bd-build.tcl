@@ -52,6 +52,11 @@ if {$USE_CLOCK_INTERFACE} {
   connect_bd_net [get_bd_pins zynq_ps/pl_clk0] [get_bd_pins $TOP/hostClk]
 }
 
+# external laser pin
+startgroup
+make_bd_pins_external  [get_bd_pins $TOP/io_laserOut]
+endgroup
+
 # ---- proc_sys_reset for each clock domain ----
 set PS_RST  [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 ps_rst]
 set DSP_RST [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 dsp_rst]
@@ -122,7 +127,7 @@ if {$USE_CLOCK_INTERFACE} {
   connect_bd_net [get_bd_pins ps_rst/peripheral_aresetn] [get_bd_pins $AXI_CONNECT/aresetn]
 }
 
-# RFSoC4x2 Phase 5C observability only: sample the shared control reset and the PS/SmartConnect AXI
+# RFSoC4x2 observability only: sample the shared control reset and the PS/SmartConnect AXI
 # boundaries without changing the functional datapath. A later JTAG capture can distinguish reset,
 # request-acceptance, routing, and missing-slave-response failures after a separately authorized load.
 if {$PLATFORM eq "rfsoc4x2"} {

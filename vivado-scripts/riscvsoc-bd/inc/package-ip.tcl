@@ -20,7 +20,7 @@ add_files -fileset constrs_1 $SOURCE_PATH/PulseTableSoc_ooc.xdc
 set_property USED_IN {synthesis implementation out_of_context} [get_files $SOURCE_PATH/PulseTableSoc_ooc.xdc]
 
 ipx::package_project -root_dir $IP_REPO -vendor user.org -library user -taxonomy /UserIP \
-  -import_files -set_current false -force -quiet
+  -import_files -set_current false -force
 ipx::open_ipxact_file $IP_REPO/component.xml
 
 # SpinalHDL memories use relative `$readmemb` paths. Vivado does not import standalone .bin project

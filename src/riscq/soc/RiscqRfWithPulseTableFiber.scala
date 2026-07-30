@@ -161,14 +161,15 @@ case class RiscqRfWithPulseTableFiber(
     val roChannel   = mkDriveChannel(1,            0x10000, getPipe(riscvSoc.cmd, linkPipe))
 
     // digital laser channel:
-    val laserOut = Bool()
-    laserOut := False
+    val postedLaserOut = Bool()
 
     if (ownsLaser) {
       val laserChannel = LaserChannel(timeWidth = timeWidth)
       laserChannel.io.cmd << RfLink.demux(getPipe(riscvSoc.cmd, linkPipe), 0x30000, 0x10000, 16)
       laserChannel.io.timeBcast := time
-      laserOut := laserChannel.io.pulse
+      postedLaserOut := laserChannel.io.pulse
+    } else {
+      postedLaserOut := False
     }
 
     // demod carrier: a scheduled, envelope-shaped complex pulse (a PulseDriveChannel pointed at the
@@ -204,7 +205,7 @@ case class RiscqRfWithPulseTableFiber(
   val demodMemPort   = posted.demodChannel.io.memPort
   val decoderRd      = posted.decoder
   val startTime      = posted.gateChannel.startTime    // gate buffer's per-buffer startTime (sims observe it)
-  val laserOut       = posted.laserOut
+  val laserOut       = posted.postedLaserOut
 
   // ── envelope-memory read ports (reconstruct the full `lanes`-lane batch from the interpolated line) ──
   def expandEnv(data: Bits, interp: Int, lanes: Int): Bits =

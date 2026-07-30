@@ -18,3 +18,7 @@ set_clock_groups -asynchronous \
 # 0.001 ns setup uncertainty to cover the 0.000495 ns rounding. Same-edge hold analysis is independent
 # of this period correction.
 set_clock_uncertainty -setup 0.001 [get_clocks -quiet {RFDAC0_CLK RFDAC1_CLK RFDAC2_CLK}]
+
+# PMOD laser pins
+set_property PACKAGE_PIN AF16 [get_ports "io_laserOut_0"]
+set_property IOSTANDARD LVCMOS18 [get_ports "io_laserOut_0"]
