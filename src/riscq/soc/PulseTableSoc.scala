@@ -337,7 +337,7 @@ object RFSoC4x2ChannelMap {
  * register-file ROM init across the identical cores.
  */
 object GenPulseTableSocVivado extends App {
-  // Change default qubitNum to 1 for your NV-center setup
+  // Change default qubitNum to 1 for NV-center setup
   val qubitNum = args.filter(_.forall(_.isDigit)).headOption.map(_.toInt).getOrElse(1)
   val dir      = args.find(a => a.nonEmpty && !a.forall(_.isDigit)).getOrElse("./build/rtl")
   val cfg      = SpinalConfig(mode = Verilog, targetDirectory = dir, romReuse = true).setScopeProperty(LutInputs, 6)
