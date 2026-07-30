@@ -28,6 +28,7 @@ case class RiscqRFSoC4x2SocPorts(
   val axi    = slave(Axi4(Axi4Config(addressWidth = 32, dataWidth = 32, idWidth = 2)))
   val dac    = List.fill(dacNum)(master port Stream(Bits(dacBatch * dataWidth bits)))
   val adc    = List.fill(adcNum)(slave port Stream(Bits(adcBatch * dataWidth bits)))
+  val laserOut = out Bool ()
 
   // DAC always streams; ADC is always accepted (free-running converters).
   dac.foreach(_.valid := True)

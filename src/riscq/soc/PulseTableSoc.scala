@@ -172,13 +172,16 @@ case class PulseTableSoc(
         time = coreTimes(i), batchSize = N, dataWidth = w, adcBatch = adcBatch,
         envDepth = envDepth, readoutInterp = readoutInterp, gateInterp = gateInterp, demodInterp = demodInterp,
         linkPipe = linkPipe, withTestTap = withTest, memDepth = memDepth, gatePulseNum = gatePulseNum,
-        queueDepth = queueDepth))
+        queueDepth = queueDepth, ownsLaser = (i==1)))
 
     // floorplan: keep each core's RiscvSoc a hard synth boundary so opt can't merge logic across the
     // identical cores into a MUXF7/F8 macro that straddles two per-core pblocks. The shared host AXI fans
     // instruction-load to every core, so opt_design otherwise shares equivalent iLoad-response logic
     // between cores. Synthesis-only attribute — zero behavioural change, sims ignore it.
     riscqCores.foreach(_.riscvSoc.addAttribute("KEEP_HIERARCHY", "TRUE"))
+
+    // Laser IO:
+    io.laserOut := riscqCores(0).laserOut
 
     // host fan-out: per-core instruction memory + the three write-only envelope banks all wire DIRECT to
     // their narrow 32-bit region bus — each envelope fiber bridges a 32-bit host beat into its wide line

@@ -13,6 +13,7 @@ import riscq.riscv.RiscqParam
 import riscq.soc.fabric.BramWriteFiber
 import riscq.soc.rf.{PulseDriveChannel, DemodChannel}
 import riscq.soc.link.{RfLink, ReadoutResultLink, RfCmd}
+import riscq.digital.LaserChannel
 
 /**
  * One qubit core — the agentic counterpart of the RISC-Q reference `RiscqRfWithPulseTableFiber`. After
@@ -64,7 +65,8 @@ case class RiscqRfWithPulseTableFiber(
     demodPulseNum: Int = 1,
     linkPipe: Int = 4,
     queueDepth: Int = 4,          // per-parameter TimedQueue depth in every drive/demod PulseGenerator
-    withTestTap: Boolean = false
+    withTestTap: Boolean = false,
+    ownsLaser: Boolean = false,
 ) extends Area {
   val w        = dataWidth
   val envWidth = batchSize * 2 * w          // complex envelope line (512 for N=16, w=16)
@@ -158,6 +160,17 @@ case class RiscqRfWithPulseTableFiber(
     val gateChannel = mkDriveChannel(gatePulseNum, 0x0,     getPipe(riscvSoc.cmd, linkPipe))
     val roChannel   = mkDriveChannel(1,            0x10000, getPipe(riscvSoc.cmd, linkPipe))
 
+    // digital laser channel:
+    val laserOut = Bool()
+    laserOut := False
+
+    if (ownsLaser) {
+      val laserChannel = LaserChannel(timeWidth = timeWidth)
+      laserChannel.io.cmd << RfLink.demux(getPipe(riscvSoc.cmd, linkPipe), 0x30000, 0x10000, 16)
+      laserChannel.io.timeBcast := time
+      laserOut := laserChannel.io.pulse
+    }
+
     // demod carrier: a scheduled, envelope-shaped complex pulse (a PulseDriveChannel pointed at the
     // decoder). Its posted RF sub-window carries the same fire/freq/table/startTime map as a drive
     // channel; software programs a matched-filter envelope once and fires the demod aligned with the
@@ -191,6 +204,7 @@ case class RiscqRfWithPulseTableFiber(
   val demodMemPort   = posted.demodChannel.io.memPort
   val decoderRd      = posted.decoder
   val startTime      = posted.gateChannel.startTime    // gate buffer's per-buffer startTime (sims observe it)
+  val laserOut       = posted.laserOut
 
   // ── envelope-memory read ports (reconstruct the full `lanes`-lane batch from the interpolated line) ──
   def expandEnv(data: Bits, interp: Int, lanes: Int): Bits =
