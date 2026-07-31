@@ -176,6 +176,7 @@ class SocMap:
     RF_GATE = 0x10000               # gate drive channel base
     RF_READOUT = 0x20000            # readout drive channel base
     RF_DEMOD = 0x30000              # demod carrier: a drive channel (fire@0/freq@4/table@0x10../startTime@0x4100)
+    RF_LASER = 0x40000              # laser base addr
     #                                 firing the demod IS the readout (carrier-triggered decoder, no arm);
     #                                 0x40000 stays reserved/unmapped (no decoder register window).
     # per drive channel (offsets from the channel base; PulseParamBufferParams):
@@ -191,6 +192,13 @@ class SocMap:
     HOST_FROM_HOST = 0x10           # legacy mailbox, unused by this framework
     HOST_TIME_OFF_LO = 0x40
     HOST_TIME_OFF_HI = 0x44
+
+    # Laser control offsets
+    LASER_FIRE = 0x0
+    LASER_HALF_PERIOD = 0x4
+    LASER_DURATION = 0x8
+    LASER_CW = 0xc
+    LASER_START = 0x10
 
     LEAD = LEAD
 
@@ -351,6 +359,12 @@ class SocMap:
             ("RQ_GATE_PULSE_NUM", p.gate_pulse_num), ("RQ_ENV_DEPTH", p.env_depth),
             ("RQ_LEAD", LEAD), ("RQ_RO_LEAD", READOUT_LEAD),
             ("RQ_RO_MAX_WIN", 1 << READOUT_MAX_WIN_LOG2),
+            ("RQ_LASER", self.RF_LASER),
+            ("LASER_FIRE", self.LASER_FIRE),
+            ("LASER_HALF_PERIOD", self.LASER_HALF_PERIOD),
+            ("LASER_DURATION", self.LASER_DURATION),
+            ("LASER_CW", self.LASER_CW),
+            ("LASER_START", self.LASER_START),
         ]
         lines = [f"/* GENERATED from SocParams '{p.name}' by riscq.map — do not edit. */",
                  "#ifndef RISCQ_MAP_H", "#define RISCQ_MAP_H", ""]

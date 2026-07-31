@@ -9,8 +9,6 @@ module laser_out #() (
     reg [15:0] counter;
     reg [7:0] period_counter;
     reg output_toggle;
-    reg valid_prev;
-    wire valid_pulse;
 
     reg [7:0] latched_h_period;
     reg latched_cw;
@@ -24,10 +22,8 @@ module laser_out #() (
             counter <= 16'b0;
             output_toggle <= 1'b0;
             period_counter <= 8'b0;
-            valid_prev <= 1'b0;
         end else begin
-            valid_prev <= valid;
-            if (valid_pulse && half_period != 0 && dur != 0) begin // new pulse has priority over old, invalid pulses discarded
+            if (valid && half_period != 0 && dur != 0) begin // new pulse has priority over old, invalid pulses discarded
                 latched_h_period <= half_period - 1; // latch half period to reload the counter later
                 period_counter <= half_period - 1;
                 counter <= dur - 1;
@@ -48,7 +44,6 @@ module laser_out #() (
         end
     end
 
-    assign valid_pulse = valid && !valid_prev; // trigger on rising edge of valid
     assign d_out = output_toggle;
     
 endmodule

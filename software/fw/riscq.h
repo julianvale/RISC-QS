@@ -63,6 +63,23 @@ static inline void play(uint32_t ch, uint32_t slot, uint32_t t) {
     fire(ch, slot);
 }
 
+/* 
+Laser control macro
+Constraints:
+  - half-period: 1–255 batch ticks
+  - duration: 1–65535 batch ticks
+  - CW: 0 or 1
+  - CW still needs a nonzero half-period because the current RTL rejects zero half-period parameters.
+*/
+
+static inline void play_laser(uint16_t half_period, uint32_t dur, uint16_t cw, uint32_t t) {
+    RQ_MMIO(RQ_LASER + LASER_HALF_PERIOD) = half_period; 
+    RQ_MMIO(RQ_LASER + LASER_DURATION) = dur;
+    RQ_MMIO(RQ_LASER + LASER_CW) = cw;
+    RQ_MMIO(RQ_LASER + LASER_START) = t;
+    RQ_MMIO(RQ_LASER + LASER_FIRE) = 1;
+}
+
 /* virtual-Z frame rotation: added (mod 2^16 = one turn) to the fired slot's phase, CAPTURED AT
  * FIRE — write it before the fire it should apply to; it persists until rewritten. */
 static inline void set_phase_offset(uint32_t ch, int32_t code) {
