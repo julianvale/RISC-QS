@@ -1,4 +1,4 @@
-"""Shared manifest-backed, reset-safe firmware deployment engine.
+"""Shared reset-safe firmware deployment engine.
 
 The engine depends on a deliberately small adapter protocol and is fully
 host-testable.  Board startup, RPC authentication, and provisioning belong to
@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Protocol
 
 from riscq.deployment.bundle import BundleError, VerifiedBundle, load_firmware_bundle
+from riscq.deployment.context import PlatformContext
 from riscq.deployment.identity import sha256_bytes, strict_json_loads
 from riscq.map import MEM_BASE, SocMap
 
@@ -51,17 +52,6 @@ class _DriverAdapter:
         verifier = getattr(self.driver, "verify_platform_identity", None)
         if verifier is not None:
             return dict(verifier(dict(expected)))
-        hashes = getattr(self.driver, "hashes", None)
-        params_path = getattr(self.driver, "params_path", None)
-        bit_path = getattr(self.driver, "bit_path", None)
-        hwh_path = getattr(self.driver, "hwh_path", None)
-        if isinstance(hashes, Mapping) and all(path is not None for path in
-                                               (params_path, bit_path, hwh_path)):
-            return {**{key: expected[key] for key in
-                       ("id", "version", "params_digest", "map_digest", "abi_digest")},
-                    "bit_sha256": str(hashes[bit_path.name]),
-                    "hwh_sha256": str(hashes[hwh_path.name]),
-                    "raw_params_sha256": str(hashes[params_path.name])}
         raise DeploymentError("adapter cannot verify the active platform identity")
 
     def assert_reset(self) -> None:
@@ -176,12 +166,10 @@ def _symbols(bundle: VerifiedBundle, mem_bytes: int) -> dict[str, Symbol]:
 class DeploymentEngine:
     """Validate first, then perform only bounded word operations under reset recovery."""
 
-    def __init__(self, adapter: DeploymentAdapter, platform: VerifiedBundle, *,
+    def __init__(self, adapter: DeploymentAdapter, platform: PlatformContext, *,
                  monotonic: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep):
-        if platform.kind != "platform" or platform.raw_config is None:
-            raise BundleError("DeploymentEngine requires a verified platform bundle")
-        if adapter.board_id != platform.manifest["id"]:
+        if adapter.board_id != platform.identity["id"]:
             raise DeploymentError("explicit adapter does not match platform identity")
         self.adapter = adapter
         self.platform = platform
@@ -193,8 +181,7 @@ class DeploymentEngine:
 
     @property
     def identity(self) -> dict[str, str]:
-        return {key: str(self.platform.manifest[key]) for key in
-                ("id", "version", "params_digest", "map_digest", "abi_digest")}
+        return dict(self.platform.identity)
 
     def _firmware(self, source: VerifiedBundle | str | bytes) -> VerifiedBundle:
         bundle = source if isinstance(source, VerifiedBundle) else load_firmware_bundle(source)
@@ -202,7 +189,7 @@ class DeploymentEngine:
             raise BundleError("expected a firmware bundle")
         required = bundle.manifest["requires"]
         for field in ("params_digest", "map_digest", "abi_digest"):
-            if required[field] != self.platform.manifest[field]:
+            if required[field] != self.platform.identity[field]:
                 raise BundleError(f"firmware/platform {field} mismatch")
         return bundle
 
@@ -212,13 +199,7 @@ class DeploymentEngine:
     def _verify_active_platform(self) -> None:
         if self._platform_verified:
             return
-        files = self.platform.manifest["files"]
-        expected = {
-            **self.identity,
-            "bit_sha256": str(files["platform.bit"]["sha256"]),
-            "hwh_sha256": str(files["platform.hwh"]["sha256"]),
-            "raw_params_sha256": str(self.platform.manifest["raw_params_sha256"]),
-        }
+        expected = self.identity
         observed = dict(self.adapter.verify_platform(expected))
         if observed != expected:
             raise DeploymentError(f"active platform identity mismatch: {observed!r} != {expected!r}")
@@ -251,7 +232,7 @@ class DeploymentEngine:
         expected_hash = str(bundle.manifest["image"]["sha256"])
         if sha256_bytes(image) != expected_hash:
             raise BundleError("firmware bytes changed after verification")
-        key = (sha256_bytes(self.platform.to_bytes()), sha256_bytes(bundle.to_bytes()))
+        key = (self.platform.key, sha256_bytes(bundle.to_bytes()))
         if self._loaded_key == key:
             return bundle
         self._verify_active_platform()

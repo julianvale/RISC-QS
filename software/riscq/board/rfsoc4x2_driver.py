@@ -9,7 +9,6 @@ DAC-current, DAC-output, or ADC-capture operations here.
 from __future__ import annotations
 
 import hashlib
-import json
 import time
 from pathlib import Path
 
@@ -17,7 +16,8 @@ import pynq
 import xrfclk
 import xrfdc  # noqa: F401 -- registers the RFdc overlay driver
 
-from riscq.map import SocMap, SocParams
+from riscq.deployment.identity import raw_config_identity
+from riscq.map import SocMap
 
 
 AXI_BASE = 0x8000_0000
@@ -26,11 +26,6 @@ RFDC_BASE = 0x9000_0000
 RFDC_SIZE = 0x0004_0000
 LMK_MHZ = 245.76
 LMX_MHZ = 491.52
-EXPECTED_BIT_SHA256 = "5ffe224d38a1ee5e4a1d5eee8fa0988644a8e37492bba4a45c9412fc815eff0f"
-EXPECTED_HWH_SHA256 = "d3eddfd06915e1b35d62bc44316092438758224842896143856898980b47e983"
-EXPECTED_PARAMS_SHA256 = "bad1e52c9c8b1417bf57b879e3c817a0a8c44ed32a71c682a92b30c4eb1d7156"
-
-
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -40,42 +35,44 @@ def _sha256(path: Path) -> str:
 
 
 class Rfsoc4x2Driver:
-    """Accepted-artifact loader with explicit, fail-fast board bring-up stages."""
+    """RFSoC4x2 loader with explicit, fail-fast board bring-up stages."""
 
-    def __init__(self, bit_path: str | Path, params_path: str | Path):
+    def __init__(self, bit_path: str | Path, params_path: str | Path,
+                 hwh_path: str | Path | None = None):
         self.bit_path = Path(bit_path)
-        self.hwh_path = self.bit_path.with_suffix(".hwh")
+        self.hwh_path = Path(hwh_path) if hwh_path is not None else self.bit_path.with_suffix(".hwh")
         self.params_path = Path(params_path)
         missing = [str(path) for path in (self.bit_path, self.hwh_path, self.params_path)
                    if not path.is_file()]
         if missing:
-            raise FileNotFoundError(f"missing accepted RFSoC4x2 platform files: {missing}")
+            raise FileNotFoundError(f"missing RFSoC4x2 platform files: {missing}")
         self.hashes = {
             self.bit_path.name: _sha256(self.bit_path),
             self.hwh_path.name: _sha256(self.hwh_path),
             self.params_path.name: _sha256(self.params_path),
         }
-        if self.hashes[self.bit_path.name] != EXPECTED_BIT_SHA256:
-            raise RuntimeError(f"bit hash {self.hashes[self.bit_path.name]} != accepted "
-                               f"{EXPECTED_BIT_SHA256}")
-        if self.hashes[self.hwh_path.name] != EXPECTED_HWH_SHA256:
-            raise RuntimeError(f"hwh hash {self.hashes[self.hwh_path.name]} != accepted "
-                               f"{EXPECTED_HWH_SHA256}")
-        if self.hashes[self.params_path.name] != EXPECTED_PARAMS_SHA256:
-            raise RuntimeError(f"raw params hash {self.hashes[self.params_path.name]} != accepted "
-                               f"{EXPECTED_PARAMS_SHA256}")
-
-        raw = json.loads(self.params_path.read_text())
-        self.params = SocParams.from_json(json.dumps(raw))
+        self.raw_identity = raw_config_identity(self.params_path.read_bytes())
+        self.params = self.raw_identity.params
         if (self.params.name, self.params.qubit_num, self.params.dsp_freq_hz) != (
                 "rfsoc4x2-nv-1q", 1, 491_520_000.0):
-            raise RuntimeError("params are not the accepted one-core RFSoC4x2 491.52 MHz build")
+            raise RuntimeError("params are not the supported one-core RFSoC4x2 491.52 MHz build")
         self.map = SocMap(self.params)
         self.overlay = None
         self.rfdc = None
         self.mmio = None
         self.reset_held = None
         self.stages = {"clocks": False, "overlay": False, "mmio": False}
+
+    def verify_platform_identity(self, expected: dict[str, str]) -> dict[str, str]:
+        """Return identity from the files actually loaded by this driver."""
+        return {
+            "id": self.raw_identity.platform_id,
+            "version": self.bit_path.parent.name,
+            **self.raw_identity.requirements(),
+            "raw_params_sha256": self.raw_identity.raw_sha256,
+            "bit_sha256": self.hashes[self.bit_path.name],
+            "hwh_sha256": self.hashes[self.hwh_path.name],
+        }
 
     def program_clocks(self) -> None:
         xrfclk.set_ref_clks(lmk_freq=LMK_MHZ, lmx_freq=LMX_MHZ)

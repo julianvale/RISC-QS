@@ -11,7 +11,8 @@ import Pyro5.errors
 import serpent
 
 from riscq.board.rfsoc4x2_validation import validate_rfdc_health
-from riscq.deployment.bundle import BundleError, load_platform_bundle
+from riscq.deployment.bundle import BundleError
+from riscq.deployment.context import PlatformContext
 from riscq.deployment.engine import DeploymentEngine, adapter_for
 from riscq.deployment.program import (Rfsoc4x2ProgramAdapter, validate_program_identity,
                                        validate_program_wire)
@@ -24,13 +25,10 @@ FIRMWARE_DIR = Path("/var/lib/riscq/firmware")
 
 
 def load_service_config(path: str | Path = CONFIG_PATH) -> dict:
-    """Load the exact root-owned service selection, without directory discovery."""
+    """Load the small root-owned network configuration."""
     document = json.loads(Path(path).read_text())
-    if not isinstance(document, dict) or set(document) != {"platform", "bind", "port"}:
-        raise RuntimeError("service configuration must contain exactly platform, bind, and port")
-    if (not isinstance(document["platform"], str) or Path(document["platform"]).name != document["platform"]
-            or not document["platform"].endswith(".rqplatform")):
-        raise RuntimeError("service platform must be one filename ending in .rqplatform")
+    if not isinstance(document, dict) or set(document) != {"bind", "port"}:
+        raise RuntimeError("service configuration must contain exactly bind and port")
     if not isinstance(document["bind"], str) or not document["bind"].strip():
         raise RuntimeError("service bind address is required")
     if (not isinstance(document["port"], int) or isinstance(document["port"], bool)
@@ -62,7 +60,8 @@ class RiscqBoardService:
         self._program_driver = None
 
     def status(self) -> dict:
-        return {"ready": True, "platform": self._engine.identity}
+        return {"ready": True, "platform": self._engine.identity,
+                "params": self._engine.platform.params_json}
 
     def run_firmware(self, bundle: bytes, parameters: dict, results: list, timeout_s: float) -> dict:
         if isinstance(bundle, dict):
@@ -132,25 +131,15 @@ class RiscqBoardService:
                         for name, array in out[0].items()}}
 
 
-def startup_sequence(config: dict | None = None):
+def startup_sequence(config: dict | None = None, *,
+                     platforms_dir: str | Path = PLATFORMS_DIR,
+                     firmware_dir: str | Path = FIRMWARE_DIR):
     # Keep configuration and fake-service tests host-only; PYNQ exists only on the board.
     from riscq.board.rfsoc4x2_driver import Rfsoc4x2Driver
     config = load_service_config() if config is None else config
-    platform_path = PLATFORMS_DIR / config["platform"]
-    if not platform_path.is_file():
-        raise FileNotFoundError(f"configured platform bundle missing: {platform_path}")
-    verified_platform = load_platform_bundle(platform_path)
-
-    overlay_dir = Path("/tmp/riscq_overlay")
-    overlay_dir.mkdir(parents=True, exist_ok=True)
-    bit_path = overlay_dir / "platform.bit"
-    hwh_path = overlay_dir / "platform.hwh"
-    params_path = overlay_dir / "params.json"
-    bit_path.write_bytes(verified_platform.files["platform.bit"])
-    hwh_path.write_bytes(verified_platform.files["platform.hwh"])
-    params_path.write_bytes(verified_platform.files["params.json"])
-
-    driver = Rfsoc4x2Driver(bit_path=bit_path, params_path=params_path)
+    platform = PlatformContext.from_current(platforms_dir)
+    driver = Rfsoc4x2Driver(bit_path=platform.bit_path, hwh_path=platform.hwh_path,
+                            params_path=platform.params_path)
     driver.program_clocks()
     driver.load_overlay()
     driver.open_mmio()
@@ -159,9 +148,9 @@ def startup_sequence(config: dict | None = None):
     driver.probe_last_ram_word()
     driver.reset_hold()
 
-    adapter = adapter_for(verified_platform.manifest["id"], driver, driver.map)
-    engine = DeploymentEngine(adapter, verified_platform)
-    selftest_path = FIRMWARE_DIR / "selftest.rqfw"
+    adapter = adapter_for(platform.identity["id"], driver, driver.map)
+    engine = DeploymentEngine(adapter, platform)
+    selftest_path = Path(firmware_dir) / "selftest.rqfw"
     if not selftest_path.is_file():
         raise FileNotFoundError(f"Self-test bundle missing at {selftest_path}")
     result = engine.run(selftest_path.read_bytes(), results=["board_check_result"], timeout_s=0.5)

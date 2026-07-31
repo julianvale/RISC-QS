@@ -122,27 +122,30 @@ class ProgramDriver:
             raise RuntimeError(f"cannot read board profile {profile_path}: {exc}") from exc
         if not isinstance(document, dict) or set(document) - {"endpoint", "params", "token", "port"}:
             raise RuntimeError("board profile has unsupported fields")
-        if not isinstance(document.get("params"), str):
-            raise RuntimeError("board profile must name a host-side raw params file")
-        params_path = Path(document["params"])
-        if not params_path.is_absolute():
-            params_path = profile_path.parent / params_path
-        raw = params_path.read_bytes()
-        from riscq.deployment.identity import raw_config_identity
-        identity = raw_config_identity(raw)
-        if identity.platform_id != "rfsoc4x2-nv-1q" or identity.params.qubit_num != 1:
-            raise RuntimeError("ProgramDriver.connect requires the accepted one-core RFSoC4x2 profile")
         if transport_factory is None:
             from riscq.rpc_transport import create_rpc_transport
             transport_factory = create_rpc_transport
         transport = transport_factory(document)
         status = dict(transport.status())
+        raw = status.get("params")
+        if not isinstance(raw, str):
+            params_name = document.get("params")
+            if not isinstance(params_name, str):
+                raise RuntimeError("board status omitted active raw params")
+            params_path = Path(params_name)
+            if not params_path.is_absolute():
+                params_path = profile_path.parent / params_path
+            raw = params_path.read_text()
+        from riscq.deployment.identity import raw_config_identity
+        identity = raw_config_identity(raw)
+        if identity.platform_id != "rfsoc4x2-nv-1q" or identity.params.qubit_num != 1:
+            raise RuntimeError("ProgramDriver.connect requires the one-core RFSoC4x2 profile")
         platform = status.get("platform", {})
         for key, value in {"id": identity.platform_id, **identity.requirements()}.items():
             if platform.get(key) != value:
                 raise RuntimeError(f"board status {key} does not match host profile")
         return cls(transport, __import__("riscq.map", fromlist=["SocMap"]).SocMap(identity.params),
-                   raw.decode("utf-8"))
+                   raw)
 
     def close(self):
         close = getattr(self._transport, "close", None)

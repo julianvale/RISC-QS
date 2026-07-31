@@ -14,9 +14,9 @@ MAX_PROGRAM_BYTES = 128 * 1024
 
 
 def validate_program_identity(params_json: str | bytes, platform) -> SocMap:
-    """Require the complete raw platform and all derived identities to match."""
+    """Require program parameters to match the files loaded by the board."""
     identity = raw_config_identity(params_json)
-    expected = platform.manifest
+    expected = platform.identity
     if identity.raw_sha256 != expected["raw_params_sha256"]:
         raise BundleError("Program raw platform parameters do not match the active platform")
     for field in ("params_digest", "map_digest", "abi_digest"):

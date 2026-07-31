@@ -1,10 +1,9 @@
-"""Deterministic, fail-closed ``.rqplatform`` and ``.rqfw`` containers."""
+"""Deterministic, fail-closed firmware (``.rqfw``) containers."""
 
 from __future__ import annotations
 
 import io
 import json
-import math
 import re
 import stat
 import zipfile
@@ -12,11 +11,9 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
-from riscq.deployment.identity import (RawConfigIdentity, canonical_json_bytes,
-                                       raw_config_identity, sha256_bytes, strict_json_loads)
+from riscq.deployment.identity import canonical_json_bytes, sha256_bytes, strict_json_loads
 
 
-PLATFORM_FORMAT = "riscq-platform-v1"
 FIRMWARE_FORMAT = "riscq-firmware-v1"
 MAX_ENTRIES = 256
 MAX_MEMBER_BYTES = 128 * 1024 * 1024
@@ -44,7 +41,6 @@ class VerifiedBundle:
     kind: str
     manifest: dict[str, Any]
     files: dict[str, bytes]
-    raw_config: RawConfigIdentity | None = None
 
     @property
     def semantic_key(self) -> tuple[str, str]:
@@ -70,39 +66,6 @@ def _require_text(value: Any, field: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise BundleError(f"{field} must be a nonempty string")
     return value
-
-
-def _validate_platform_metadata(clocks: Any, hwh_ranges: Any, device: Any,
-                                board_part: Any, source_commit: Any, vivado: Any) -> None:
-    clock_keys = {"lmk_mhz", "lmx_mhz", "pl_clk0_hz", "dsp_hz"}
-    if not isinstance(clocks, dict) or set(clocks) != clock_keys:
-        raise BundleError(f"clocks keys must be exactly {sorted(clock_keys)}")
-    for name, value in clocks.items():
-        if (not isinstance(value, (int, float)) or isinstance(value, bool)
-                or not math.isfinite(value) or value <= 0):
-            raise BundleError(f"clocks.{name} must be a positive finite number")
-
-    if not isinstance(hwh_ranges, dict) or not hwh_ranges:
-        raise BundleError("hwh_ranges must be a nonempty map")
-    for name, aperture in hwh_ranges.items():
-        _require_text(name, "hwh_ranges key")
-        if not isinstance(aperture, dict) or set(aperture) != {"base", "range"}:
-            raise BundleError(f"hwh_ranges.{name} must contain exactly base and range")
-        for field in ("base", "range"):
-            value = aperture[field]
-            if (not isinstance(value, int) or isinstance(value, bool) or value < 0
-                    or (field == "range" and value == 0)):
-                raise BundleError(f"hwh_ranges.{name}.{field} is invalid")
-
-    _require_text(device, "device")
-    _require_text(board_part, "board_part")
-    if not isinstance(source_commit, str) or not re.fullmatch(r"[0-9a-f]{40,64}", source_commit):
-        raise BundleError("source_commit must be a lowercase 40-64 digit Git object id")
-    vivado_keys = {"version", "software_build", "ip_build", "shared_data_build"}
-    if not isinstance(vivado, dict) or set(vivado) != vivado_keys:
-        raise BundleError(f"vivado keys must be exactly {sorted(vivado_keys)}")
-    for name, value in vivado.items():
-        _require_text(value, f"vivado.{name}")
 
 
 def _validate_firmware_provenance(source: Any, runtime: Any, toolchain: Any) -> None:
@@ -261,72 +224,6 @@ def _write_new(output: str | Path, data: bytes) -> Path:
     return path
 
 
-def platform_bundle_bytes(*, platform_id: str, version: str, bit: bytes, hwh: bytes,
-                          params: bytes, clocks: Mapping[str, Any],
-                          hwh_ranges: Mapping[str, Any], device: str, board_part: str,
-                          source_commit: str, vivado: Mapping[str, Any],
-                          ltx: bytes | None = None) -> bytes:
-    _validate_platform_metadata(clocks, hwh_ranges, device, board_part, source_commit, vivado)
-    identity = raw_config_identity(params)
-    if _require_id(platform_id, "platform_id") != identity.platform_id:
-        raise BundleError("platform id does not match complete raw params")
-    _require_id(version, "version")
-    payloads = {"params.json": bytes(params), "platform.bit": bytes(bit),
-                "platform.hwh": bytes(hwh)}
-    if ltx is not None:
-        payloads["debug.ltx"] = bytes(ltx)
-    manifest: dict[str, Any] = {
-        "format": PLATFORM_FORMAT,
-        "id": platform_id,
-        "version": version,
-        "raw_params_sha256": identity.raw_sha256,
-        **identity.requirements(),
-        "clocks": dict(clocks),
-        "hwh_ranges": dict(hwh_ranges),
-        "device": str(device),
-        "board_part": str(board_part),
-        "source_commit": str(source_commit),
-        "vivado": dict(vivado),
-        "files": _file_records(payloads, sorted(payloads)),
-    }
-    files = {**payloads, "manifest.json": canonical_json_bytes(manifest)}
-    return _deterministic_zip(files)
-
-
-def create_platform_bundle(output: str | Path, **kwargs: Any) -> Path:
-    return _write_new(output, platform_bundle_bytes(**kwargs))
-
-
-def load_platform_bundle(source: str | Path | bytes) -> VerifiedBundle:
-    files = _load_zip(source)
-    manifest = _manifest(files)
-    required_keys = {"format", "id", "version", "raw_params_sha256", "params_digest",
-                     "map_digest", "abi_digest", "clocks", "hwh_ranges", "device",
-                     "board_part", "source_commit", "vivado", "files"}
-    if set(manifest) != required_keys or manifest.get("format") != PLATFORM_FORMAT:
-        raise BundleError("malformed platform manifest schema")
-    _require_id(manifest["id"], "id")
-    _require_id(manifest["version"], "version")
-    for field in ("raw_params_sha256", "params_digest", "map_digest", "abi_digest"):
-        _require_hex(manifest[field], field)
-    _validate_platform_metadata(manifest["clocks"], manifest["hwh_ranges"], manifest["device"],
-                                manifest["board_part"], manifest["source_commit"],
-                                manifest["vivado"])
-    payload_names = set(manifest["files"]) if isinstance(manifest["files"], dict) else set()
-    allowed_base = {"params.json", "platform.bit", "platform.hwh"}
-    if not allowed_base <= payload_names or payload_names - allowed_base - {"debug.ltx"}:
-        raise BundleError("platform payload set is malformed")
-    _verify_records(manifest, files, {"manifest.json", *payload_names})
-    identity = raw_config_identity(files["params.json"])
-    expected = {"raw_params_sha256": identity.raw_sha256, **identity.requirements()}
-    for field, value in expected.items():
-        if manifest[field] != value:
-            raise BundleError(f"platform {field} mismatch")
-    if manifest["id"] != identity.platform_id:
-        raise BundleError("platform id does not match raw params")
-    return VerifiedBundle("platform", manifest, files, identity)
-
-
 def firmware_bundle_bytes(*, firmware_id: str, version: str, image: bytes,
                           symbols: Mapping[str, tuple[int, int] | list[int]], entry: int,
                           requirements: Mapping[str, str], source: Mapping[str, Any],
@@ -442,8 +339,6 @@ def load_firmware_bundle(source: str | Path | bytes) -> VerifiedBundle:
 def inspect_bundle(source: str | Path | bytes) -> dict[str, Any]:
     files = _load_zip(source)
     manifest = _manifest(files)
-    if manifest.get("format") == PLATFORM_FORMAT:
-        return load_platform_bundle(source).manifest
     if manifest.get("format") == FIRMWARE_FORMAT:
         return load_firmware_bundle(source).manifest
     raise BundleError("unknown bundle format")

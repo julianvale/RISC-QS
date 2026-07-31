@@ -56,7 +56,8 @@ class LocalEngineTransport:
         self._self_test_bundle = self_test_bundle
 
     def status(self) -> Mapping[str, Any]:
-        return {"ready": True, "platform": dict(self._engine.identity)}
+        return {"ready": True, "platform": dict(self._engine.identity),
+                "params": self._engine.platform.params_json}
 
     def run_firmware(self, bundle: bytes, *, parameters: Mapping[str, int],
                      results: list[str], timeout_s: float) -> Mapping[str, Any]:
@@ -97,16 +98,25 @@ class Board:
             raise RuntimeError(f"cannot read default board profile {profile_path}: {exc}") from exc
         if not isinstance(document, dict) or set(document) - {"endpoint", "params", "token", "port"}:
             raise RuntimeError("board profile has unsupported fields")
-        if not isinstance(document.get("params"), str):
-            raise RuntimeError("board profile must name a host-side raw params file")
         if transport_factory is None:
             from riscq.rpc_transport import create_rpc_transport
             transport_factory = create_rpc_transport
-        params_path = Path(document["params"])
-        if not params_path.is_absolute():
-            params_path = profile_path.parent / params_path
-        
-        return cls(transport_factory(document), params_path.read_bytes())
+        transport = transport_factory(document)
+        status = dict(transport.status())
+        raw_params = status.get("params")
+        if not isinstance(raw_params, str):
+            # Read old profiles only as a migration fallback. New profiles contain no
+            # params file; the board service is the source of truth.
+            params_name = document.get("params")
+            if not isinstance(params_name, str):
+                raise RuntimeError("board status omitted active raw params")
+            params_path = Path(params_name)
+            if not params_path.is_absolute():
+                params_path = profile_path.parent / params_path
+            raw_params = params_path.read_text()
+        board = cls(transport, raw_params)
+        board._check_status(status)
+        return board
 
     @property
     def platform_identity(self) -> dict[str, str]:
@@ -114,13 +124,21 @@ class Board:
 
     def status(self) -> Mapping[str, Any]:
         status = dict(self._transport.status())
+        self._check_status(status)
+        return status
+
+    def _check_status(self, status: Mapping[str, Any]) -> None:
         platform = status.get("platform")
         if not isinstance(platform, Mapping):
             raise RuntimeError("board status omitted platform identity")
         for field, expected in self.platform_identity.items():
             if platform.get(field) != expected:
                 raise RuntimeError(f"board status {field} does not match host profile")
-        return status
+        active_params = status.get("params")
+        if active_params is not None:
+            active = raw_config_identity(active_params)
+            if active.raw_sha256 != self._identity.raw_sha256:
+                raise RuntimeError("board status raw params do not match active host identity")
 
     def compile_c(self, source: str | Path, *, name: str | None = None,
                   version: str | None = None,
