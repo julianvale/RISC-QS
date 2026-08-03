@@ -12,7 +12,7 @@ from riscq.deployment.context import PlatformContext
 from riscq.deployment.identity import raw_config_identity
 from riscq.deployment.program import Rfsoc4x2ProgramAdapter, validate_program_wire
 from riscq.deployment.service import RiscqBoardService
-from riscq.driver.remote import ProgramDriver
+from riscq.driver.remote import RemoteDriver
 from riscq.map import MEM_BASE, SocMap
 
 
@@ -99,33 +99,31 @@ def test_program_adapter_uses_map_derived_envelope_window():
     assert writes[0][1] == m.env_base(0, 0) + 3 * m.channel(0).line_bytes
 
 
-def test_program_driver_profile_routes_batches_without_mmio(tmp_path):
-    params = tmp_path / "params.json"
-    params.write_bytes(PARAMS)
-    profile = tmp_path / "board.json"
-    profile.write_text('{"endpoint":"private", "token":"t"}')
+def test_remote_driver_retains_the_standard_four_method_surface(monkeypatch):
+    class Proxy:
+        def read32(self, addr):
+            return 7
 
-    class Transport:
-        def __init__(self):
-            self.calls = []
+        def write32(self, addr, value):
+            self.write = (addr, value)
 
-        def status(self):
-            return {"platform": {"id": IDENTITY.platform_id, **IDENTITY.requirements()},
-                    "params": PARAMS.decode()}
+        def read_block(self, addr, nbytes):
+            return b"\0" * nbytes
 
-        def program_setup(self, params_json, progmap, **kwargs):
-            self.calls.append(("setup", params_json, progmap, kwargs))
+        def write_block(self, addr, data):
+            self.block = (addr, bytes(data))
 
-        def program_rerun(self, *args, **kwargs):
-            self.calls.append(("rerun", args, kwargs))
-            return {0: {"out": np.array([3], dtype="<i4").tobytes()}}
+        def _pyroRelease(self):
+            self.closed = True
 
-    transport = Transport()
-    drv = ProgramDriver.connect(profile, transport_factory=lambda _doc: transport)
-    prog = run._prog_from_wire(wire(drv.map))
-    run.setup(drv, drv.map, {0: prog})
-    out = run.rerun(drv, drv.map, {0: prog}, results=["out"], timeout_s=0.1)
-    assert list(out[0]["out"]) == [3]
-    assert [call[0] for call in transport.calls] == ["setup", "rerun"]
-    assert transport.calls[0][1] == PARAMS.decode()
-    assert not any(hasattr(drv, name) for name in ("read32", "write32", "read_block", "write_block"))
+    proxy = Proxy()
+    monkeypatch.setattr("Pyro5.api.Proxy", lambda _uri: proxy)
+    drv = RemoteDriver("private", 9091)
+    assert drv.read32(4) == 7
+    drv.write32(8, -1)
+    drv.write_block(12, b"\x01\0\0\0")
+    assert proxy.write == (8, 0xffffffff)
+    assert proxy.block == (12, b"\x01\0\0\0")
+    assert drv.read_block(16, 4) == b"\0" * 4
+    drv.close()
+    assert proxy.closed

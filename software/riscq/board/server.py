@@ -97,7 +97,7 @@ class BoardServer:
     # per batch (spec 08 §5). poll_done takes its hardware branch (no `.sim` here). ──
 
     @_locked
-    def remote_setup(self, params_json, progmap, timeout_s=None):
+    def remote_setup(self, params_json, progmap):
         from riscq import run as _run
         from riscq.map import SocMap, SocParams
 
@@ -112,14 +112,14 @@ class BoardServer:
         return None
 
     @_locked
-    def remote_rerun(self, cores, params, arrays, results, timeout, timeout_s=None):
+    def remote_rerun(self, cores, params, arrays, results, timeout):
         from riscq import run as _run
         progs = {int(c): self._progs[int(c)] for c in cores}
         out = _run.rerun(self._driver(), self._m, progs,
                          params={int(c): v for c, v in dict(params).items()},
                          arrays={int(c): v for c, v in dict(arrays).items()},
                          results=(None if results is None else list(results)),
-                         timeout=int(timeout), timeout_s=timeout_s)
+                         timeout=int(timeout))
         return {c: {n: bytes(a.astype("<i4").tobytes()) for n, a in d.items()}
                 for c, d in out.items()}
 
@@ -194,19 +194,37 @@ class BoardServer:
     @_locked
     def load(self, bundle, download=True):
         d = self._bits / str(bundle)
-        xsa, params = d / "top.xsa", d / "params.json"
-        missing = [p.name for p in (xsa, params) if not p.exists()]
+        params = d / "params.json"
+        if not params.exists():
+            have = sorted(f.name for f in d.iterdir()) if d.is_dir() else "<no bundle dir>"
+            raise FileNotFoundError(f"bundle {bundle!r}: missing ['params.json'] in {d} "
+                                    f"(have: {have})")
+        params_text = params.read_text()
+        platform = json.loads(params_text).get("name")
+        if platform == "rfsoc4x2-nv-1q":
+            artifacts = (d / "top.bit", d / "top.hwh", params)
+        else:
+            artifacts = (d / "top.xsa", params)
+        missing = [p.name for p in artifacts if not p.exists()]
         if missing:
             have = sorted(f.name for f in d.iterdir()) if d.is_dir() else "<no bundle dir>"
             raise FileNotFoundError(f"bundle {bundle!r}: missing {missing} in {d} (have: {have})")
-        board_file = d / "board.json"
-        board = json.loads(board_file.read_text()) if board_file.exists() else None
 
-        from riscq.board.pynq_driver import PynqDriver   # lazy: only importable on the board
-        self._drv = PynqDriver(str(xsa), str(params), board=board, download=bool(download))
-        self._params = params.read_text()
+        if platform == "rfsoc4x2-nv-1q":
+            from riscq.board.rfsoc4x2_driver import Rfsoc4x2Driver
+            bit, hwh, _ = artifacts
+            self._drv = Rfsoc4x2Driver(str(bit), str(hwh), str(params), download=bool(download))
+            digest_file = bit
+        else:
+            board_file = d / "board.json"
+            board = json.loads(board_file.read_text()) if board_file.exists() else None
+            from riscq.board.pynq_driver import PynqDriver  # lazy: only importable on the board
+            xsa, _ = artifacts
+            self._drv = PynqDriver(str(xsa), str(params), board=board, download=bool(download))
+            digest_file = xsa
+        self._params = params_text
         self._bundle = str(bundle)
-        self._xsa_sha = hashlib.sha256(xsa.read_bytes()).hexdigest()
+        self._xsa_sha = hashlib.sha256(digest_file.read_bytes()).hexdigest()
         self._m, self._progs = None, {}
         return self.info()
 

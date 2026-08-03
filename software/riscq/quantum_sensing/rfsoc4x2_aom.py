@@ -8,10 +8,12 @@ modulation.
 from __future__ import annotations
 
 import argparse
+import math
 
-from riscq import ProgramDriver, run
+from riscq import run
+from riscq.driver.remote import RemoteDriver
 from riscq.lang import Array, ParamTable, compile_kernel, kernel
-from riscq.map import READOUT_LEAD
+from riscq.map import READOUT_LEAD, SocMap, SocParams
 from riscq.pulses import Pulse, envelopes, units
 
 
@@ -58,23 +60,28 @@ def build_program(m):
                           out=Array(2), duration=PULSE_BATCHES)
 
 
-def run_aom(profile=None, timeout_s: float = 2.0):
-    """Connect to the restricted Program service, set up once, and execute once."""
-    drv = ProgramDriver.connect(profile)
+def run_aom(host: str, port: int = 9091, timeout_s: float = 2.0):
+    """Connect through the standard RemoteDriver, set up once, and execute once."""
+    if timeout_s <= 0:
+        raise ValueError("timeout-s must be positive")
+    drv = RemoteDriver(host, port)
     try:
-        program = build_program(drv.map)
-        run.setup(drv, drv.map, {0: program})
-        return run.rerun(drv, drv.map, {0: program}, results=["out"], timeout_s=timeout_s)[0]["out"]
+        m = SocMap(SocParams.from_json(drv.board.get_params()))
+        program = build_program(m)
+        run.setup(drv, m, {0: program})
+        return run.rerun(drv, m, {0: program}, results=["out"],
+                         timeout=max(1, math.ceil(timeout_s * 1000)))[0]["out"]
     finally:
         drv.close()
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", default=None)
+    parser.add_argument("--host", required=True)
+    parser.add_argument("--port", type=int, default=9091)
     parser.add_argument("--timeout-s", type=float, default=2.0)
     args = parser.parse_args(argv)
-    result = run_aom(args.profile, args.timeout_s)
+    result = run_aom(args.host, args.port, args.timeout_s)
     print(f"carrier={CARRIER_HZ:g} Hz amplitude_code={AMP_CODE} result={result.tolist()}")
 
 

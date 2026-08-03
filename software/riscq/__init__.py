@@ -1,7 +1,5 @@
-"""RISC-Q host control, deterministic bundles, and bounded board execution."""
+"""riscq control software: map / build / run over the 4-method Driver seam."""
 
-from riscq.api import Board, Firmware, HostTransport
 from riscq.map import SocParams, SocMap
-from riscq.driver.remote import ProgramDriver
 
-__all__ = ["Board", "Firmware", "HostTransport", "ProgramDriver", "SocParams", "SocMap"]
+__all__ = ["SocParams", "SocMap"]

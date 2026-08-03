@@ -9,14 +9,16 @@ from __future__ import annotations
 import dataclasses
 import hashlib
 import os
+import sys
 import threading
+import types
 from pathlib import Path
 
 import Pyro5.api
 import pytest
 
 from riscq.board.server import BoardServer
-from riscq.driver.remote import RemoteDriver, upload_bundle
+from riscq.driver.remote import RemoteDriver, upload_bundle, upload_rfsoc4x2_bundle
 from riscq.map import SocMap, SocParams
 from riscq import run as rq
 
@@ -105,6 +107,89 @@ def test_store_chunked_upload(board):
     assert (bits / "b1" / "top.xsa").read_bytes() == xsa_data
     assert (bits / "b1" / "params.json").read_text() == PARAMS_TEXT
     assert b'"adc_nyquist": 2' in (bits / "b1" / "board.json").read_bytes()
+
+
+def test_rfsoc4x2_upload_and_load_selects_bit_hwh_backend(board, monkeypatch):
+    """The exact RFSoC4x2 name selects its three native artifacts, not the XSA path."""
+    drv, srv, _, bits = board
+    bit, hwh, params = (bits.parent / "top.bit", bits.parent / "top.hwh",
+                        bits.parent / "params.json")
+    bit.write_bytes(b"rfsoc bit")
+    hwh.write_bytes(b"rfsoc hwh")
+    rfsoc_params = (CONFIGS / "rfsoc4x2-nv-1q.json").read_text()
+    params.write_text(rfsoc_params)
+    upload_rfsoc4x2_bundle(drv, "rfsoc", bit, hwh, params, board={"ignored": True})
+    assert drv.board.bundles() == {"rfsoc": ["board.json", "params.json", "top.bit", "top.hwh"]}
+
+    created = []
+
+    class FakeRfsoc4x2Driver(RamDriver):
+        def __init__(self, bit_path, hwh_path, params_path, download=True):
+            super().__init__()
+            created.append((bit_path, hwh_path, params_path, download))
+            self.mts_result = None
+
+    fake_module = types.ModuleType("riscq.board.rfsoc4x2_driver")
+    fake_module.Rfsoc4x2Driver = FakeRfsoc4x2Driver
+    monkeypatch.setitem(sys.modules, "riscq.board.rfsoc4x2_driver", fake_module)
+    info = drv.board.load("rfsoc", download=False)
+    assert created == [(str(bits / "rfsoc" / "top.bit"), str(bits / "rfsoc" / "top.hwh"),
+                        str(bits / "rfsoc" / "params.json"), False)]
+    assert info["bundle"] == "rfsoc"
+    assert info["xsa_sha"] == hashlib.sha256((bits / "rfsoc" / "top.bit").read_bytes()).hexdigest()
+    assert drv.board.get_params() == rfsoc_params
+
+    # The ordinary four-method RemoteDriver face works after the RFSoC4x2 load.
+    drv.write_block(0x100, b"\x01\0\0\0\x02\0\0\0")
+    assert drv.read_block(0x100, 8) == b"\x01\0\0\0\x02\0\0\0"
+    assert srv._drv.mem[0x100] == 1 and srv._drv.mem[0x104] == 2
+
+
+def test_non_rfsoc4x2_bundle_keeps_original_xsa_pynq_selection(board, monkeypatch):
+    """Only the exact RFSoC4x2 platform name changes the established ZCU216 load path."""
+    drv, _, _, bits = board
+    xsa, params = bits.parent / "top.xsa", bits.parent / "params.json"
+    xsa.write_bytes(b"zcu xsa")
+    params.write_text(PARAMS_TEXT)
+    upload_bundle(drv, "zcu", xsa, params, board={"mts": None})
+    created = []
+
+    class FakePynqDriver(RamDriver):
+        def __init__(self, xsa_path, params_path, board=None, download=True):
+            super().__init__()
+            created.append((xsa_path, params_path, board, download))
+            self.mts_result = None
+
+    fake_module = types.ModuleType("riscq.board.pynq_driver")
+    fake_module.PynqDriver = FakePynqDriver
+    monkeypatch.setitem(sys.modules, "riscq.board.pynq_driver", fake_module)
+    info = drv.board.load("zcu")
+    assert created == [(str(bits / "zcu" / "top.xsa"), str(bits / "zcu" / "params.json"),
+                        {"mts": None}, True)]
+    assert info["xsa_sha"] == hashlib.sha256((bits / "zcu" / "top.xsa").read_bytes()).hexdigest()
+
+
+def test_remote_block_calls_do_not_degenerate_into_register_rpcs():
+    """RemoteDriver sends one block RPC; it never loops through read32/write32 client-side."""
+    calls = []
+
+    class RecordingProxy:
+        def write_block(self, addr, data):
+            calls.append(("write_block", addr, bytes(data)))
+
+        def read_block(self, addr, nbytes):
+            calls.append(("read_block", addr, nbytes))
+            return b"\x05\0\0\0"[:nbytes]
+
+        def __getattr__(self, name):
+            raise AssertionError(f"unexpected client-side RPC: {name}")
+
+    drv = object.__new__(RemoteDriver)
+    drv._proxy = RecordingProxy()
+    drv.write_block(0x300, b"\x03\0\0\0\x04\0\0\0")
+    assert drv.read_block(0x304, 4) == b"\x05\0\0\0"
+    assert calls == [("write_block", 0x300, b"\x03\0\0\0\x04\0\0\0"),
+                     ("read_block", 0x304, 4)]
 
 
 def test_store_rejects_corrupt_sha(board):

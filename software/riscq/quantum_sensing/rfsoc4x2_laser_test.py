@@ -8,9 +8,12 @@ signal is LVCMOS18: use a high-impedance probe and expect a 1.8 V logic-high lev
 from __future__ import annotations
 
 import argparse
+import math
 
-from riscq import ProgramDriver, run
+from riscq import run
+from riscq.driver.remote import RemoteDriver
 from riscq.lang import Array, compile_kernel, kernel
+from riscq.map import SocMap, SocParams
 
 
 # 491.52 MHz / (2 * 128) = 1.92 MHz.  49,152 ticks = 100 us at 491.52 MHz.
@@ -41,20 +44,23 @@ def _validate(half_period: int, duration: int, cw: int) -> None:
         raise ValueError("cw must be 0 or 1")
 
 
-def run_once(profile: str | None, half_period: int, duration: int, cw: int,
+def run_once(host: str, port: int, half_period: int, duration: int, cw: int,
              timeout_s: float = 2.0):
     """Load and run the core-0 laser test, returning its recorded schedule values."""
     _validate(half_period, duration, cw)
-    drv = ProgramDriver.connect(profile)
+    if timeout_s <= 0:
+        raise ValueError("timeout-s must be positive")
+    drv = RemoteDriver(host, port)
     try:
-        if drv.map.params.name != "rfsoc4x2-nv-1q":
+        m = SocMap(SocParams.from_json(drv.board.get_params()))
+        if m.params.name != "rfsoc4x2-nv-1q":
             raise RuntimeError("this test is only valid for the rfsoc4x2-nv-1q platform")
-        program = compile_kernel(laser_burst, drv.map, out=Array(4))
-        run.setup(drv, drv.map, {0: program})
+        program = compile_kernel(laser_burst, m, out=Array(4))
+        run.setup(drv, m, {0: program})
         return run.rerun(
-            drv, drv.map, {0: program},
+            drv, m, {0: program},
             params={0: {"half_period": half_period, "duration": duration, "cw": cw}},
-            results=["out"], timeout_s=timeout_s,
+            results=["out"], timeout=max(1, math.ceil(timeout_s * 1000)),
         )[0]["out"]
     finally:
         drv.close()
@@ -62,7 +68,8 @@ def run_once(profile: str | None, half_period: int, duration: int, cw: int,
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--profile", default=None, help="board-service profile path")
+    parser.add_argument("--host", required=True, help="board-service host or Pyro URI")
+    parser.add_argument("--port", type=int, default=9091)
     parser.add_argument("--half-period", type=int, default=DEFAULT_HALF_PERIOD)
     parser.add_argument("--duration", type=int, default=DEFAULT_DURATION,
                         help="burst length in DSP ticks")
@@ -71,7 +78,7 @@ def main(argv=None):
     parser.add_argument("--timeout-s", type=float, default=2.0)
     args = parser.parse_args(argv)
 
-    result = run_once(args.profile, args.half_period, args.duration, int(args.cw), args.timeout_s)
+    result = run_once(args.host, args.port, args.half_period, args.duration, int(args.cw), args.timeout_s)
     _, half_period, duration, cw = (int(value) for value in result)
     dsp_hz = 491_520_000.0
     mode = "high-level pulse" if cw else f"square wave at {dsp_hz / (2 * half_period):.6g} Hz"
