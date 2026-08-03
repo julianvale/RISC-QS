@@ -1,0 +1,15 @@
+# RFSoC4x2 BoardServer service. Install with a board-specific environment file.
+[Unit]
+Description=RISC-Q RFSoC4x2 board server (Pyro5)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/riscq/rfsoc4x2.env
+ExecStart=/usr/bin/python3 -m riscq.board.server --bits /opt/riscq/rfsoc4x2-bits --bundle ${RISCQ_RFSOC4X2_BUNDLE} --host ${RISCQ_RFSOC4X2_BIND} --port ${RISCQ_RFSOC4X2_PORT}
+Restart=on-failure
+User=root
+
+[Install]
+WantedBy=multi-user.target
