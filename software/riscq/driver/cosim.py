@@ -78,13 +78,12 @@ class _RemoteExtras:
     def __init__(self, proxy: Pyro5.api.Proxy):
         self._proxy = proxy
 
-    def setup(self, params_json: str, progmap: dict, timeout_s: float | None = None) -> None:
-        # timeout_s is accepted by the shared seam; the legacy server ignores it.
-        self._proxy.remote_setup(params_json, progmap, timeout_s=timeout_s)
+    def setup(self, params_json: str, progmap: dict) -> None:
+        self._proxy.remote_setup(params_json, progmap)
 
-    def rerun(self, cores, params, arrays, results, timeout, timeout_s: float | None = None):
+    def rerun(self, cores, params, arrays, results, timeout):
         raw = self._proxy.remote_rerun(list(cores), dict(params), dict(arrays),
-                                       results, int(timeout), timeout_s=timeout_s)
+                                       results, int(timeout))
         return {int(c): {n: _to_bytes(b) for n, b in d.items()} for c, d in raw.items()}
 
 

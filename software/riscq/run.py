@@ -3,6 +3,8 @@ Backend-agnostic — the same code drives co-sim and hardware."""
 
 from __future__ import annotations
 
+import time as _time
+
 import numpy as np
 import serpent
 
