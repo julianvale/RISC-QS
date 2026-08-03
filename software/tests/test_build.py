@@ -59,6 +59,43 @@ def test_cache_hit_skips_gcc(m, tmp_path, monkeypatch):
     assert c.data
 
 
+def test_toolchain_identity_participates_in_cache_and_image_manifest(m, tmp_path, monkeypatch):
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
+    real = build.toolchain_identity()
+    monkeypatch.setattr(build, "toolchain_identity", lambda: {**real, "cache_test": {"version": "a"}})
+    runs0 = build.CC_RUNS
+    first = compile_c(TRIVIAL, m)
+    assert build.CC_RUNS == runs0 + 1
+    assert first.toolchain["cache_test"]["version"] == "a"
+    monkeypatch.setattr(build, "toolchain_identity", lambda: {**real, "cache_test": {"version": "b"}})
+    second = compile_c(TRIVIAL, m)
+    assert build.CC_RUNS == runs0 + 2
+    assert second.toolchain["cache_test"]["version"] == "b"
+
+
+def test_incomplete_cache_is_never_overwritten(m, tmp_path, monkeypatch):
+    monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
+    tools = build.toolchain_identity()
+    files = {
+        "main.c": TRIVIAL,
+        "start.S": (build.FW_DIR / "start.S").read_text(),
+        "muldiv.c": (build.FW_DIR / "muldiv.c").read_text(),
+        "riscq.h": (build.FW_DIR / "riscq.h").read_text(),
+        "riscq_map.h": m.gen_header(),
+        "link.ld": m.gen_linker(),
+    }
+    import hashlib, json
+    key = hashlib.sha256(json.dumps({"toolchain": tools, "files": files,
+                                    "flags": build._flags(m)}, sort_keys=True).encode()).hexdigest()[:16]
+    incomplete = tmp_path / key
+    incomplete.mkdir(parents=True)
+    marker = incomplete / "user-state"
+    marker.write_text("preserve")
+    with pytest.raises(RuntimeError, match="refusing to overwrite incomplete compiler cache"):
+        compile_c(TRIVIAL, m)
+    assert marker.read_text() == "preserve"
+
+
 def test_oversized_array_is_link_error(m, tmp_path, monkeypatch):
     monkeypatch.setattr(build, "BUILD_ROOT", tmp_path)
     src = '#include "riscq.h"\nvolatile int32_t huge[8192];\nint main(void){ huge[0]=1; return 0; }'

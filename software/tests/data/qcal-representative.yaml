@@ -1,0 +1,624 @@
+{
+  "hardware": {
+    "sample_rate": {
+      "DAC": 8000000000,
+      "ADC": 2000000000
+    },
+    "interpolation_ratio": {
+      "qdrv": 4,
+      "rdrv": 16,
+      "rdlo": 4
+    }
+  },
+  "reset": {
+    "passive": {
+      "delay": 0.0005
+    },
+    "active": {
+      "enabled": false
+    }
+  },
+  "two_qubit": {
+    "0-1": {
+      "gate": "CZ",
+      "enabled": false
+    }
+  },
+  "single_qubit": {
+    "0": {
+      "GE": {
+        "freq": 5400000000,
+        "T1": 0.00005,
+        "T2*": 0.00002,
+        "X90": {
+          "pulse": [
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            },
+            {
+              "env": "FAST_DRAG",
+              "time": 3.5e-8,
+              "kwargs": {
+                "amp": 0.25,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            },
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            }
+          ]
+        },
+        "X": {
+          "pulse": [
+            {
+              "env": "FAST_DRAG",
+              "time": 7e-8,
+              "kwargs": {
+                "amp": 0.25,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            }
+          ]
+        }
+      },
+      "EF": {
+        "freq": 5100000000,
+        "note": "preserved"
+      }
+    },
+    "1": {
+      "GE": {
+        "freq": 5410000000,
+        "T1": 0.000051,
+        "T2*": 0.000021000000000000002,
+        "X90": {
+          "pulse": [
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            },
+            {
+              "env": "FAST_DRAG",
+              "time": 3.5e-8,
+              "kwargs": {
+                "amp": 0.251,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            },
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            }
+          ]
+        },
+        "X": {
+          "pulse": [
+            {
+              "env": "FAST_DRAG",
+              "time": 7e-8,
+              "kwargs": {
+                "amp": 0.251,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            }
+          ]
+        }
+      },
+      "EF": {
+        "freq": 5110000000,
+        "note": "preserved"
+      }
+    },
+    "2": {
+      "GE": {
+        "freq": 5420000000,
+        "T1": 0.000052000000000000004,
+        "T2*": 0.000022000000000000003,
+        "X90": {
+          "pulse": [
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            },
+            {
+              "env": "FAST_DRAG",
+              "time": 3.5e-8,
+              "kwargs": {
+                "amp": 0.252,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            },
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            }
+          ]
+        },
+        "X": {
+          "pulse": [
+            {
+              "env": "FAST_DRAG",
+              "time": 7e-8,
+              "kwargs": {
+                "amp": 0.252,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            }
+          ]
+        }
+      },
+      "EF": {
+        "freq": 5120000000,
+        "note": "preserved"
+      }
+    },
+    "3": {
+      "GE": {
+        "freq": 5430000000,
+        "T1": 0.000053,
+        "T2*": 0.000023000000000000003,
+        "X90": {
+          "pulse": [
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            },
+            {
+              "env": "FAST_DRAG",
+              "time": 3.5e-8,
+              "kwargs": {
+                "amp": 0.253,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            },
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            }
+          ]
+        },
+        "X": {
+          "pulse": [
+            {
+              "env": "FAST_DRAG",
+              "time": 7e-8,
+              "kwargs": {
+                "amp": 0.253,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            }
+          ]
+        }
+      },
+      "EF": {
+        "freq": 5130000000,
+        "note": "preserved"
+      }
+    },
+    "4": {
+      "GE": {
+        "freq": 5440000000,
+        "T1": 0.000054000000000000005,
+        "T2*": 0.000024,
+        "X90": {
+          "pulse": [
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            },
+            {
+              "env": "FAST_DRAG",
+              "time": 3.5e-8,
+              "kwargs": {
+                "amp": 0.254,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            },
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            }
+          ]
+        },
+        "X": {
+          "pulse": [
+            {
+              "env": "FAST_DRAG",
+              "time": 7e-8,
+              "kwargs": {
+                "amp": 0.254,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            }
+          ]
+        }
+      },
+      "EF": {
+        "freq": 5140000000,
+        "note": "preserved"
+      }
+    },
+    "5": {
+      "GE": {
+        "freq": 5450000000,
+        "T1": 0.000055,
+        "T2*": 0.000025,
+        "X90": {
+          "pulse": [
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            },
+            {
+              "env": "FAST_DRAG",
+              "time": 3.5e-8,
+              "kwargs": {
+                "amp": 0.255,
+                "phase": 0.07,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            },
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            }
+          ]
+        },
+        "X": {
+          "pulse": [
+            {
+              "env": "FAST_DRAG",
+              "time": 7e-8,
+              "kwargs": {
+                "amp": 0.255,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            }
+          ]
+        }
+      },
+      "EF": {
+        "freq": 5150000000,
+        "note": "preserved"
+      }
+    },
+    "6": {
+      "GE": {
+        "freq": 5460000000,
+        "T1": 0.000056000000000000006,
+        "T2*": 0.000026000000000000002,
+        "X90": {
+          "pulse": [
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.11
+              }
+            },
+            {
+              "env": "FAST_DRAG",
+              "time": 3.5e-8,
+              "kwargs": {
+                "amp": 0.256,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            },
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.13
+              }
+            }
+          ]
+        },
+        "X": {
+          "pulse": [
+            {
+              "env": "FAST_DRAG",
+              "time": 7e-8,
+              "kwargs": {
+                "amp": 0.256,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            }
+          ]
+        }
+      },
+      "EF": {
+        "freq": 5160000000,
+        "note": "preserved"
+      }
+    },
+    "7": {
+      "GE": {
+        "freq": 5470000000,
+        "T1": 0.000057,
+        "T2*": 0.000027000000000000002,
+        "X90": {
+          "pulse": [
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            },
+            {
+              "env": "FAST_DRAG",
+              "time": 3.5e-8,
+              "kwargs": {
+                "amp": 0.257,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            },
+            {
+              "env": "virtualz",
+              "time": 0,
+              "kwargs": {
+                "phase": 0.1
+              }
+            }
+          ]
+        },
+        "X": {
+          "pulse": [
+            {
+              "env": "FAST_DRAG",
+              "time": 7e-8,
+              "kwargs": {
+                "amp": 0.257,
+                "phase": 0,
+                "alpha": 1,
+                "beta": 0.5
+              }
+            }
+          ]
+        }
+      },
+      "EF": {
+        "freq": 5170000000,
+        "note": "preserved"
+      }
+    }
+  },
+  "readout": {
+    "0": {
+      "freq": 6500000000,
+      "amp": 0.02,
+      "time": 5e-7,
+      "env": "cosine_square",
+      "kwargs": {
+        "ramp_fraction": 0.25,
+        "amp": 1,
+        "phase": 0
+      },
+      "demod": {
+        "time": 4e-7,
+        "delay": 1e-7,
+        "phase": -10,
+        "env": "square",
+        "kwargs": {
+          "amp": 1,
+          "phase": 0
+        }
+      }
+    },
+    "1": {
+      "freq": 6520000000,
+      "amp": 0.022,
+      "time": 5e-7,
+      "env": "cosine_square",
+      "kwargs": {
+        "ramp_fraction": 0.25,
+        "amp": 1,
+        "phase": 0
+      },
+      "demod": {
+        "time": 4e-7,
+        "delay": 1e-7,
+        "phase": -9,
+        "env": "square",
+        "kwargs": {
+          "amp": 1,
+          "phase": 0
+        }
+      }
+    },
+    "2": {
+      "freq": 6540000000,
+      "amp": 0.024,
+      "time": 5e-7,
+      "env": "cosine_square",
+      "kwargs": {
+        "ramp_fraction": 0.25,
+        "amp": 1,
+        "phase": 0
+      },
+      "demod": {
+        "time": 4e-7,
+        "delay": 1e-7,
+        "phase": -8,
+        "env": "square",
+        "kwargs": {
+          "amp": 1,
+          "phase": 0
+        }
+      }
+    },
+    "3": {
+      "freq": 6560000000,
+      "amp": 0.026000000000000002,
+      "time": 5e-7,
+      "env": "cosine_square",
+      "kwargs": {
+        "ramp_fraction": 0.25,
+        "amp": 1,
+        "phase": 0
+      },
+      "demod": {
+        "time": 4e-7,
+        "delay": 1e-7,
+        "phase": -7,
+        "env": "square",
+        "kwargs": {
+          "amp": 1,
+          "phase": 0
+        }
+      }
+    },
+    "4": {
+      "freq": 6580000000,
+      "amp": 0.028,
+      "time": 5e-7,
+      "env": "cosine_square",
+      "kwargs": {
+        "ramp_fraction": 0.25,
+        "amp": 1,
+        "phase": 0
+      },
+      "demod": {
+        "time": 4e-7,
+        "delay": 1e-7,
+        "phase": -6,
+        "env": "square",
+        "kwargs": {
+          "amp": 1,
+          "phase": 0
+        }
+      }
+    },
+    "5": {
+      "freq": 6600000000,
+      "amp": 0.03,
+      "time": 5e-7,
+      "env": "cosine_square",
+      "kwargs": {
+        "ramp_fraction": 0.25,
+        "amp": 1,
+        "phase": 0
+      },
+      "demod": {
+        "time": 4e-7,
+        "delay": 1e-7,
+        "phase": -5,
+        "env": "square",
+        "kwargs": {
+          "amp": 1,
+          "phase": 0
+        }
+      }
+    },
+    "6": {
+      "freq": 6620000000,
+      "amp": 0.032,
+      "time": 5e-7,
+      "env": "cosine_square",
+      "kwargs": {
+        "ramp_fraction": 0.25,
+        "amp": 1,
+        "phase": 0
+      },
+      "demod": {
+        "time": 4e-7,
+        "delay": 1e-7,
+        "phase": -4,
+        "env": "square",
+        "kwargs": {
+          "amp": 1,
+          "phase": 0
+        }
+      }
+    },
+    "7": {
+      "freq": 6640000000,
+      "amp": 0.034,
+      "time": 5e-7,
+      "env": "cosine_square",
+      "kwargs": {
+        "ramp_fraction": 0.25,
+        "amp": 1,
+        "phase": 0
+      },
+      "demod": {
+        "time": 4e-7,
+        "delay": 1e-7,
+        "phase": -3,
+        "env": "square",
+        "kwargs": {
+          "amp": 1,
+          "phase": 0
+        }
+      }
+    },
+    "herald": true
+  }
+}

@@ -216,6 +216,25 @@ def test_undefined_function_error_points_at_kernel_line(m):
     assert "definitely_not_an_op" in msg
 
 
+# ── laser: a complete scheduled shot is a normal built-in kernel operation ──
+
+def test_play_laser_kernel_call_compiles(m):
+    @kernel
+    def laser_shot(half_period: int, duration: int, cw: int):
+        t = now() + LEAD  # noqa: F821
+        play_laser(half_period, duration, cw, t)  # noqa: F821
+        wait_until(t + duration)  # noqa: F821
+
+    prog = compile_kernel(laser_shot, m)
+    c = prog.c_source
+
+    # `play_laser` is supplied by riscq.h: the DSL preserves the ordinary call and the C build
+    # proves that its declaration is available without a frontend/IR/backend special case.
+    assert "play_laser(half_period, duration, cw, t);" in c
+    assert "wait_until(t + duration);" in c
+    assert set(prog.params) == {"half_period", "duration", "cw"}
+
+
 # ── 9. the spec's rabi kernel (02 §3.1) compiles; the generated C matches §4's worked example ──
 
 def test_spec_rabi_kernel_compiles(m):

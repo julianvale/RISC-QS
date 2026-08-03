@@ -4,9 +4,9 @@ This directory contains the exact accepted RFSoC4x2 PYNQ overlay and raw build c
 artifact bytes were copied without rebuilding from the immutable external archive captured on
 2026-07-21.
 
-`rfsoc4x2-nv-1q-1.0.0.rqplatform` is the deterministic public container produced by the host-only
-packager. Its `platform.bit`, `platform.hwh`, and `params.json` members are byte-identical to the
-three source payloads in this directory.
+These are transparent release payloads. Provisioning renames the three source files to
+`platform.bit`, `platform.hwh`, and `params.json` in a named directory and places the matching wheel
+beside them. There is no platform container or metadata file.
 
 Verify before use:
 

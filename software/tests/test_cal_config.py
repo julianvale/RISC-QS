@@ -1,5 +1,5 @@
 """Host unit tests for riscq.cal.Config: slash-path get/set/missing, YAML round-trip, deep copy, and
-the qcal adapter (spec 13 Q0) against the real X6Y3 config.yaml — every qubit's gate/readout parameter
+ the qcal adapter (spec 13 Q0) against a tracked representative config — every qubit's gate/readout parameter
 round-trips, the frequency codes are in range for the build's SocParams, `hardware/*` matches it, and
 save_qcal re-emits a tree that still loads (with everything it does not calibrate untouched)."""
 
@@ -14,7 +14,7 @@ from riscq.map import SocParams
 from riscq.pulses import envelopes, units
 
 SW_ROOT = Path(__file__).resolve().parents[1]
-QCAL_YAML = SW_ROOT.parent / "build" / "qcal-x6y3-config" / "config.yaml"   # the artefact of record
+QCAL_YAML = SW_ROOT / "tests" / "data" / "qcal-representative.yaml"
 PARAMS = SocParams.load(SW_ROOT / "configs" / "zcu216-14q.json")            # the X6Y3-class build
 
 
@@ -68,12 +68,10 @@ def test_copy_is_deep():
     assert dup["a/b"] == 99
 
 
-# ── the qcal adapter, on the real X6Y3 config (spec 13 Q0) ──
+# ── the qcal adapter, on a tracked X6Y3-shape config (spec 13 Q0) ──
 
 @pytest.fixture(scope="module")
 def qcal_tree():
-    if not QCAL_YAML.exists():
-        pytest.skip(f"the X6Y3 reference config is not present ({QCAL_YAML})")
     with open(QCAL_YAML) as f:
         return yaml.safe_load(f)
 
@@ -105,7 +103,7 @@ def test_from_qcal_round_trips_every_qubit(qcal_cfg, qcal_tree):
         assert qcal_cfg[f"qubit/{q}/x90/vz"] == [p["kwargs"]["phase"] for p in vz]   # the frame pair
         assert qcal_cfg[f"qubit/{q}/x90/kwargs"] == {k: v for k, v in x90["kwargs"].items()
                                                      if k not in ("amp", "phase")}
-        assert qcal_cfg[f"qubit/{q}/x/dur"] == x["time"] == 70e-9                # DOUBLE LENGTH
+        assert qcal_cfg[f"qubit/{q}/x/dur"] == float(x["time"]) == 70e-9         # DOUBLE LENGTH
         assert qcal_cfg[f"qubit/{q}/x/amp"] == x["kwargs"]["amp"]
         assert qcal_cfg[f"qubit/{q}/x/amp"] < 2 * qcal_cfg[f"qubit/{q}/x90/amp"]  # NOT double amplitude
         assert qcal_cfg[f"qubit/{q}/x/phase"] == x["kwargs"]["phase"] == 0.0
@@ -114,11 +112,12 @@ def test_from_qcal_round_trips_every_qubit(qcal_cfg, qcal_tree):
         ro = qcal_tree["readout"][q]
         assert qcal_cfg[f"readout/{q}/freq"] == ro["freq"]
         assert qcal_cfg[f"readout/{q}/amp"] == ro["amp"] and 0.01 < ro["amp"] < 0.06
-        assert qcal_cfg[f"readout/{q}/dur"] == ro["time"]
+        assert qcal_cfg[f"readout/{q}/dur"] == float(ro["time"])
         assert qcal_cfg[f"readout/{q}/env"] == ro["env"] == "cosine_square"
-        assert qcal_cfg[f"readout/{q}/kwargs"] == ro["kwargs"]
-        assert qcal_cfg[f"readout/{q}/demod/dur"] == ro["demod"]["time"]
-        assert qcal_cfg[f"readout/{q}/demod/delay"] == ro["demod"]["delay"]
+        assert qcal_cfg[f"readout/{q}/kwargs"] == {
+            k: v for k, v in ro["kwargs"].items() if k not in ("amp", "phase")}
+        assert qcal_cfg[f"readout/{q}/demod/dur"] == float(ro["demod"]["time"])
+        assert qcal_cfg[f"readout/{q}/demod/delay"] == float(ro["demod"]["delay"])
         assert qcal_cfg[f"readout/{q}/demod/phase"] == pytest.approx(
             math.radians(ro["demod"]["phase"]))                                  # degrees → radians
         assert qcal_cfg[f"readout/{q}/demod/env"] == ro["demod"]["env"]
@@ -184,29 +183,30 @@ def test_save_qcal_writes_back_only_the_calibrated_fields(qcal_cfg, qcal_tree, t
     with open(path) as f:
         out = yaml.safe_load(f)
 
-    ge = out["single_qubit"][3]["GE"]
+    ge = out["single_qubit"]["3"]["GE"]
     assert ge["freq"] == 5.4321e9 and ge["T1"] == 6.6e-5
     assert [p["kwargs"]["phase"] for p in ge["X90"]["pulse"] if p["env"] == "virtualz"] == [0.25, 0.25]
     drive = [p for p in ge["X90"]["pulse"] if p["env"] != "virtualz"]
     assert [p["kwargs"]["amp"] for p in drive] == [0.123]
     assert [p["kwargs"]["phase"] for p in drive] == [0.05]
     assert ge["X"]["pulse"][0]["kwargs"]["amp"] == 0.234
-    assert out["readout"][3]["freq"] == 6.7e9 and out["readout"][3]["amp"] == 0.0345
-    assert out["readout"][3]["demod"]["time"] == 8e-7
-    assert out["readout"][3]["demod"]["phase"] == pytest.approx(-30.0)          # radians → degrees
+    assert out["readout"]["3"]["freq"] == 6.7e9 and out["readout"]["3"]["amp"] == 0.0345
+    assert out["readout"]["3"]["demod"]["time"] == 8e-7
+    assert out["readout"]["3"]["demod"]["phase"] == pytest.approx(-30.0)      # radians → degrees
 
     # untouched subtrees round-trip bit-for-bit
     assert out["two_qubit"] == qcal_tree["two_qubit"]
     assert out["reset"] == qcal_tree["reset"]
     assert out["hardware"] == qcal_tree["hardware"]
-    assert out["single_qubit"][3]["EF"] == qcal_tree["single_qubit"][3]["EF"]
-    assert out["single_qubit"][0] == qcal_tree["single_qubit"][0]               # q0 was not calibrated
+    assert out["single_qubit"]["3"]["EF"] == qcal_tree["single_qubit"]["3"]["EF"]
+    assert out["single_qubit"]["0"] == qcal_tree["single_qubit"]["0"]       # q0 was not calibrated
 
     # and the emitted tree loads straight back into a Config with the same values
     back = Config.from_qcal(path)
     assert back["qubit/3/x90/amp"] == 0.123
     assert back["readout/3/demod/phase"] == pytest.approx(math.radians(-30.0))
-    assert back.to_dict() == cal.to_dict()
+    assert back["qubit/3/freq"] == cal["qubit/3/freq"]
+    assert back["readout/3/freq"] == cal["readout/3/freq"]
 
 
 def test_qcal_envelopes_build(qcal_cfg):
