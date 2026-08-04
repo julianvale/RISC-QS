@@ -32,7 +32,7 @@ module imports them and never redefines Q15 (the drift trap the reference fell i
 ## 2. Where it lives
 
 ```
-software/riscq/
+software/python/riscq/
   pulse.py      # envelope generators + the envelope-RAM packer
   program.py    # the Program DSL + pulse-table allocation + C codegen
 ```
@@ -111,7 +111,7 @@ records the entry's carrier `freq`. The lowering emits the slot's four field wri
 block**. `play(handle, t)` then emits only `set_start_time(buf, ns2batch(t))` + `fire(buf, slot)`. **When
 the number of distinct pulses on a buffer is `≤ pulseNum`, every launch is two writes** — precisely the
 "start time + index" the buffer was built for. This is the main lever on the core's two real limits: CPU
-cycles per launch and bounded 16 KiB program space.
+cycles per launch and 4 KiB of program space.
 
 - *`freq` is shared per buffer*, not per slot ([01 §2b](01-hardware-contract.md)). The allocator tracks
   the buffer's current `freq` and inserts a `set_freq` before a `fire` only when the next pulse's carrier

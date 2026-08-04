@@ -79,8 +79,8 @@ result sink**), `+0x4100` `startTime`. Results are read back from the control bl
 
 ### 2c. Instruction/data RAM — base `0x80000000`
 
-One shared true-dual-port BRAM, `memDepth=4096 × 32-bit = 16 KiB`. Code, data, and stack all live here;
-fetch and load/store both view it at `0x80000000`. **Programs + any tables must fit in 16 KiB.** Reset /
+One shared true-dual-port BRAM, `memDepth=1024 × 32-bit = 4 KiB`. Code, data, and stack all live here;
+fetch and load/store both view it at `0x80000000`. **Programs + any tables must fit in 4 KiB.** Reset /
 boot PC = `0x80000000`.
 
 ---
@@ -251,7 +251,7 @@ class SocConfig:
 **Source of truth & generation.** The goal is to **emit the map + scales from SpinalHDL elaboration** (a
 small generator beside `GenPulseTableSoc` that writes `contract.json`), so the contract can never drift
 from the RTL — the QubiC/QICK lesson of pinning software to a build-generated map. Until that exists,
-`software/riscq/map.py` is the supported evaluated map implementation, and
+`software/python/riscq/contract.py` is hand-maintained to match the Scala constants above, and
 `gen_header.py` derives `firmware/include/riscq.h` from it (§02). A round-trip check — diff the
 generated header's addresses against `pulse_sched.S` — keeps the hand-maintained version honest.
 

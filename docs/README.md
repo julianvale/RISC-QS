@@ -126,3 +126,4 @@ with the [software framework overview](software/README.md).**
 | [05 — remote](software/05-remote.md) | Pyro5 server / proxy |
 | [06 — co-sim](software/06-cosim.md) | cocotb backend + qutip ADC injection |
 | [board server](software/board-server.md) | Running riscq on the ZCU216: offline install, bundles, `riscq-board-server`, `RemoteDriver` |
+| [RFSoC4x2 deployment](software/rfsoc4x2-deployment.md) | RFSoC4x2 wheel, bundle, and service installation |

@@ -34,7 +34,7 @@ experiment validated in cosim runs unchanged on the [PYNQ backend](03-driver.md)
 ## 2. Where it lives
 
 ```
-software/riscq/sim/
+software/python/riscq/cosim/
   __init__.py
   build.py        # generate PulseTableSoc Verilog (withTest=true) + Verilate it
   driver.py       # CocotbDriver(Driver) — AXI host master + per-core test-tap master
