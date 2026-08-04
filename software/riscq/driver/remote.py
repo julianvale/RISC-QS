@@ -95,13 +95,11 @@ def upload_bundle(drv: RemoteDriver, name: str, xsa: str | Path, params_json: st
 
 
 def upload_rfsoc4x2_bundle(drv: RemoteDriver, name: str, bit: str | Path, hwh: str | Path,
-                           params_json: str | Path, board: dict | None = None) -> None:
+                           params_json: str | Path) -> None:
     """Store an RFSoC4x2 bundle through the same chunked RPC as ``upload_bundle``."""
     files = [("top.bit", Path(bit).read_bytes()),
              ("top.hwh", Path(hwh).read_bytes()),
              ("params.json", Path(params_json).read_bytes())]
-    if board is not None:
-        files.append(("board.json", json.dumps(board, indent=2).encode()))
     for filename, data in files:
         drv._proxy.store_begin(name, filename, len(data), hashlib.sha256(data).hexdigest())
         for off in range(0, len(data), CHUNK):

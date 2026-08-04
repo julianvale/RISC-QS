@@ -9,7 +9,7 @@ import types
 import pytest
 
 
-def _load_driver(monkeypatch):
+def _load_driver(monkeypatch, ip_dict=None):
     events, words = [], {}
 
     class FakeMMIO:
@@ -28,6 +28,14 @@ def _load_driver(monkeypatch):
         def __init__(self, path, download):
             events.append(("overlay", path, download))
             self.rf_data_converter = object()
+            self.ip_dict = ip_dict or {
+                "top": {"phys_addr": 0x80000000, "addr_range": 0x10000000},
+                "rf_data_converter": {"phys_addr": 0x90000000, "addr_range": 0x40000,
+                                      "driver": object},
+            }
+
+        def download(self):
+            events.append(("download",))
 
     monkeypatch.setitem(sys.modules, "pynq", types.SimpleNamespace(Overlay=FakeOverlay,
                                                                       MMIO=FakeMMIO))
@@ -65,8 +73,16 @@ def test_backend_bringup_and_word_aligned_block_transfers(monkeypatch, tmp_path)
         drv.read32(1)
 
 
+def test_backend_rejects_mismatched_hwh_metadata(monkeypatch, tmp_path):
+    mod, _ = _load_driver(monkeypatch, {
+        "top": {"phys_addr": 0x80000000, "addr_range": 0x10000000},
+    })
+    with pytest.raises(RuntimeError, match="rf_data_converter"):
+        mod.Rfsoc4x2Driver(*_bundle(tmp_path))
+
+
 @pytest.mark.parametrize("method,args", [
-    ("mts", ()), ("adc_nyquist_zone", (1,)), ("dac_nyquist_zone", (0, 0, 1)),
+    ("mts", ()), ("refclks", (1,)), ("adc_nyquist_zone", (1,)), ("dac_nyquist_zone", (0, 0, 1)),
     ("dacvop", (0, 0, 20_000)),
 ])
 def test_zcu216_only_operations_fail_explicitly(monkeypatch, tmp_path, method, args):

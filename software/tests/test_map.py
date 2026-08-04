@@ -64,6 +64,14 @@ def test_sim_2q_numbers():
     assert m.demod_env(1) == 0x60000 + 0x1000
 
 
+def test_rfsoc4x2_converter_map_round_trips_through_json():
+    m = _map("rfsoc4x2-nv-1q")
+    assert m.params.dac_map == ((0, 1),)
+    assert m.params.adc_map == (0,)
+    assert (m.gate_dac(0), m.ro_dac(0), m.adc_of(0)) == (0, 1, 0)
+    assert SocParams.from_json(m.params.to_json()) == m.params
+
+
 def test_core_local_constants():
     m = _map("sim-2q")
     assert (m.CTRL_TIME_CMP, m.CTRL_WAIT_TIME_CMP, m.CTRL_TIME) == (0x4000, 0x4008, 0xBFF8)

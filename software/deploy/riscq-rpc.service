@@ -2,7 +2,7 @@
 #
 # This unit is intentionally ZCU216-only. It starts the preserved riscq.board.server /
 # riscq.driver.remote workflow and is separate from the RFSoC4x2 unit.
-# Install /etc/riscq/zcu216.env first; see docs/software/11-zcu216-setup.md.
+# Install /etc/riscq/zcu216.env first; see docs/software/09-zcu216-setup.md.
 [Unit]
 Description=RISC-Q legacy ZCU216 board server (Pyro5)
 After=network-online.target

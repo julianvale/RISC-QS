@@ -66,6 +66,10 @@ class _SimExtras:
         Needed because the co-sim fixture is session-scoped (one sim process for the whole run)."""
         self._proxy.set_model(dict(spec))
 
+    def model_state(self) -> dict:
+        """Return the active co-simulation model's test-only state."""
+        return dict(self._proxy.model_state())
+
     def shutdown(self) -> None:
         self._proxy.shutdown()
 

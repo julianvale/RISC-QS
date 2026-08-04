@@ -118,8 +118,8 @@ def test_rfsoc4x2_upload_and_load_selects_bit_hwh_backend(board, monkeypatch):
     hwh.write_bytes(b"rfsoc hwh")
     rfsoc_params = (CONFIGS / "rfsoc4x2-nv-1q.json").read_text()
     params.write_text(rfsoc_params)
-    upload_rfsoc4x2_bundle(drv, "rfsoc", bit, hwh, params, board={"ignored": True})
-    assert drv.board.bundles() == {"rfsoc": ["board.json", "params.json", "top.bit", "top.hwh"]}
+    upload_rfsoc4x2_bundle(drv, "rfsoc", bit, hwh, params)
+    assert drv.board.bundles() == {"rfsoc": ["params.json", "top.bit", "top.hwh"]}
 
     created = []
 
