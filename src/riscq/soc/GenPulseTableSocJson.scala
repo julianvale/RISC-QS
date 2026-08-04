@@ -70,6 +70,7 @@ object GenPulseTableSocJson extends App {
     dacNum        = int("dac_num"),
     adcNum        = int("adc_num"),
     dspFreqHz     = long("dsp_freq_hz"),
+    withLaserOut  = boolOr("with_laser_out", false),
     readoutInterp = int("readout_interp"),
     gateInterp    = int("gate_interp"),
     demodInterp   = intOr("demod_interp", 4),

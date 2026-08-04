@@ -29,7 +29,7 @@ object LaserCpuSim extends App {
   SimConfig.addSimulatorFlag("-Wno-MULTIDRIVEN")
     .addSimulatorFlag("--x-initial 0")
     .compile {
-      val dut = PulseTableSoc(qubitNum, dacMap, adcMap, withTest = false)
+      val dut = PulseTableSoc(qubitNum, dacMap, adcMap, withTest = false, withLaserOut = true)
       dut.riscqArea.time.simPublic()
       // Capture the CPU's posted start-time write to identify the requested timestamp.  Waveform
       // observations below still use only the external top-level laser pin.
@@ -95,7 +95,7 @@ object LaserCpuSim extends App {
         dspCd.waitSampling()
         guard += 1
         val now = dut.riscqArea.time.toBigInt.toInt
-        val high = dut.io.laserOut.toBoolean
+        val high = dut.io.laserOut.get.toBoolean
         if (now < start - 1 && high) lowBeforeWindow = false
         if (high && !sawHigh) firstHigh = Some(now)
         if (high) {

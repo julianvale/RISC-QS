@@ -15,5 +15,6 @@
     "link_pipe": 4,
     "queue_depth": 4,
     "with_mul": true,
+    "with_laser_out": true,
     "dsp_freq_hz": 491520000.0
 }

@@ -41,6 +41,7 @@ case class PulseTableSoc(
     withTest: Boolean = false,
     vivado: Boolean = false,
     dspFreqHz: Long = 500000000L,
+    withLaserOut: Boolean = false,
     // RISC-V core plugin config, replicated across all `qubitNum` cores. Defaults to the verified
     // timing-closure stack for the packed multi-core floorplan, every flag RVLS-bit-exact:
     //   - `gshareMem` moves the GShare 2-bit counter table from a flip-flop array + one-hot write decode
@@ -77,8 +78,8 @@ case class PulseTableSoc(
     // RAM and the B2 dcOffset MAX_FANOUT cap are baked into PulseParamBuffer; the B3 queue lean-pop into
     // TimedQueue; the C1 registered head is a TimedQueue-level option, no longer plumbed here).
     adcPipe: Int = 3,                   // C2: register stages on the ADC nets off the RFDC edge
-) extends RFSoC4x2Top(dacNum = dacNum, adcNum = adcNum, dacBatch = 16, adcBatch = 4, dataWidth = 16,
-  vivado = vivado, dspFreqHz = dspFreqHz) {
+) extends Zcu216Top(dacNum = dacNum, adcNum = adcNum, dacBatch = 16, adcBatch = 4, dataWidth = 16,
+  vivado = vivado, dspFreqHz = dspFreqHz, withLaserOut = withLaserOut) {
   val N        = 16    // DAC drive batch
   val adcBatch = 4
   val w        = 16
@@ -172,7 +173,7 @@ case class PulseTableSoc(
         time = coreTimes(i), batchSize = N, dataWidth = w, adcBatch = adcBatch,
         envDepth = envDepth, readoutInterp = readoutInterp, gateInterp = gateInterp, demodInterp = demodInterp,
         linkPipe = linkPipe, withTestTap = withTest, memDepth = memDepth, gatePulseNum = gatePulseNum,
-        queueDepth = queueDepth, ownsLaser = (i==0)))
+        queueDepth = queueDepth, ownsLaser = withLaserOut && i == 0))
 
     // floorplan: keep each core's RiscvSoc a hard synth boundary so opt can't merge logic across the
     // identical cores into a MUXF7/F8 macro that straddles two per-core pblocks. The shared host AXI fans
@@ -180,8 +181,7 @@ case class PulseTableSoc(
     // between cores. Synthesis-only attribute — zero behavioural change, sims ignore it.
     riscqCores.foreach(_.riscvSoc.addAttribute("KEEP_HIERARCHY", "TRUE"))
 
-    // Laser IO:
-    io.laserOut := riscqCores(0).laserOut
+    io.laserOut.foreach(_ := riscqCores(0).laserOut)
 
     // host fan-out: per-core instruction memory + the three write-only envelope banks all wire DIRECT to
     // their narrow 32-bit region bus — each envelope fiber bridges a 32-bit host beat into its wide line
@@ -323,15 +323,6 @@ object SocChannelMap {
     (0 until qubitNum).map(c => c -> readoutConverter(c)).toMap
 }
 
-/** Logical converter numbering for the one-core RFSoC 4x2 NV proof of concept. */
-object RFSoC4x2ChannelMap {
-  def dacMap(qubitNum: Int): Map[(Int, Int), Int] =
-    (0 until qubitNum).flatMap(c => List((c, 0) -> 0, (c, 1) -> 1)).toMap
-
-  def adcMap(qubitNum: Int): Map[Int, Int] =
-    (0 until qubitNum).map(c => c -> 0).toMap
-}
-
 /**
  * RTL generation for the Vivado ZCU216 flow: emits `PulseTableSoc.v` *with* the
  * `X_INTERFACE_INFO`/`FREQ_HZ` bus-interface attributes (host clock renamed `hostClk`/`hostRst`) plus the
@@ -340,19 +331,21 @@ object RFSoC4x2ChannelMap {
  * register-file ROM init across the identical cores.
  */
 object GenPulseTableSocVivado extends App {
-  // Change default qubitNum to 1 for NV-center setup
-  val qubitNum = args.filter(_.forall(_.isDigit)).headOption.map(_.toInt).getOrElse(1)
+  // args: `[N]` qubit count (default 14) and `[dir]` target directory (the first non-numeric arg;
+  // default `./build/rtl`), so the `.v` + `ClockInterface.v` + register-file `.bin` land in the
+  // per-project build dir the Vivado flow runs from.
+  // Builds the narrow posted-link RF architecture — pair with the per-core / two-region floorplan.
+  // PulseTableSoc tags each core's `RiscvSoc` `(* KEEP_HIERARCHY = "TRUE" *)` so synthesis can't
+  // dissolve or cross-merge the identical cores; the per-core pblocks pin each core's `RiscvSoc`, so
+  // that boundary must remain a distinct macro for the floorplan to bind.
+  val qubitNum = args.filter(_.forall(_.isDigit)).headOption.map(_.toInt).getOrElse(14)
   val dir      = args.find(a => a.nonEmpty && !a.forall(_.isDigit)).getOrElse("./build/rtl")
   val cfg      = SpinalConfig(mode = Verilog, targetDirectory = dir, romReuse = true).setScopeProperty(LutInputs, 6)
-  
   cfg.generate(PulseTableSoc(
     qubitNum = qubitNum,
-    dacMap   = RFSoC4x2ChannelMap.dacMap(qubitNum),
-    adcMap   = RFSoC4x2ChannelMap.adcMap(qubitNum),
-    dacNum   = 2,
-    adcNum   = 4,   
+    dacMap   = SocChannelMap.dacMap(qubitNum),
+    adcMap   = SocChannelMap.adcMap(qubitNum),
     vivado   = true))
-    
   cfg.generate(riscq.misc.ClockInterface())
   println(s"[GenPulseTableSocVivado] emitted $dir/PulseTableSoc.v + ClockInterface.v (qubitNum=$qubitNum, vivado=true)")
 }

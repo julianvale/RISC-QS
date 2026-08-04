@@ -52,10 +52,11 @@ if {$USE_CLOCK_INTERFACE} {
   connect_bd_net [get_bd_pins zynq_ps/pl_clk0] [get_bd_pins $TOP/hostClk]
 }
 
-# external laser pin
-startgroup
-make_bd_pins_external  [get_bd_pins $TOP/io_laserOut]
-endgroup
+if {$PLATFORM eq "rfsoc4x2"} {
+  startgroup
+  make_bd_pins_external [get_bd_pins $TOP/io_laserOut]
+  endgroup
+}
 
 # ---- proc_sys_reset for each clock domain ----
 set PS_RST  [create_bd_cell -type ip -vlnv xilinx.com:ip:proc_sys_reset:5.0 ps_rst]

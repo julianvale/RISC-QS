@@ -58,13 +58,14 @@ case class SocMemoryMap(
  */
 case class RiscqZcu216SocPorts(
     dacNum: Int = 16, adcNum: Int = 16, dacBatch: Int = 16, adcBatch: Int = 16, dataWidth: Int = 16,
-    vivado: Boolean = false
+    vivado: Boolean = false, withLaserOut: Boolean = false
 ) extends Bundle {
   val dspClk = in Bool ()
   val dspRst = in Bool ()
   val axi    = slave(Axi4(Axi4Config(addressWidth = 32, dataWidth = 32, idWidth = 2)))
   val dac    = List.fill(dacNum)(master port Stream(Bits(dacBatch * dataWidth bits)))
   val adc    = List.fill(adcNum)(slave port Stream(Bits(adcBatch * dataWidth bits)))
+  val laserOut = if (withLaserOut) Some(out Bool ()) else None
 
   // DAC always streams; ADC is always accepted (free-running converters).
   dac.foreach(_.valid := True)
@@ -83,9 +84,9 @@ case class RiscqZcu216SocPorts(
  */
 abstract class Zcu216Top(
     dacNum: Int = 16, adcNum: Int = 16, dacBatch: Int = 16, adcBatch: Int = 16, dataWidth: Int = 16,
-    vivado: Boolean = false
+    vivado: Boolean = false, dspFreqHz: Long = 500000000L, withLaserOut: Boolean = false
 ) extends Component {
-  val io = RiscqZcu216SocPorts(dacNum, adcNum, dacBatch, adcBatch, dataWidth, vivado)
+  val io = RiscqZcu216SocPorts(dacNum, adcNum, dacBatch, adcBatch, dataWidth, vivado, withLaserOut)
 
   val hostCd = ClockDomain.current
   io.dspClk.setName("dspClk")
@@ -98,6 +99,6 @@ abstract class Zcu216Top(
   if (vivado) {
     hostCd.renamePulledWires("hostClk", "hostRst")
     VivadoClkHelper.addInference(hostCd.readClockWire, hostCd.readResetWire, 100000000L)
-    VivadoClkHelper.addInference(dspCd.readClockWire, io.dspRst, 500000000L)
+    VivadoClkHelper.addInference(dspCd.readClockWire, io.dspRst, dspFreqHz)
   }
 }

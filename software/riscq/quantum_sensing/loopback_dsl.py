@@ -17,6 +17,7 @@ from riscq.driver.remote import RemoteDriver
 from riscq.lang import Array, ParamTable, compile_kernel, kernel
 from riscq.map import READOUT_LEAD, SocMap, SocParams, pack16
 from riscq.pulses import Pulse, envelopes, units
+from typing import no_type_check
 
 
 MODE_NAMES = ("matched", "no-dac", "detuned")
@@ -50,7 +51,7 @@ def _tables(m):
     })
     return gate, demod
 
-
+@no_type_check
 @kernel
 def k_loopback(gate: ParamTable, demod: ParamTable, out: Array, mode: int,
                dac_code: int, matched_code: int, detuned_code: int):
