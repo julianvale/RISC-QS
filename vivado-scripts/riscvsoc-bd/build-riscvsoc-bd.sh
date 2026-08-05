@@ -21,11 +21,9 @@
 # The qubit count / DAC-ADC maps / interpolation all come from the JSON config; the tcl flow discovers the
 # core count from the netlist, so a different config just needs a matching floorplan (pblocks-bd.tcl).
 #
-# ZCU216 retains the legacy full-build default. RFSoC4x2 defaults to validation-only. Its synthesis
-# checkpoint is a separate explicit opt-in that permits target generation plus required OOC/top
-# synthesis, while still prohibiting implementation and deployment artifacts. A second explicit
-# deployment mode runs routed signoff and emits a bitstream plus PYNQ HWH metadata; it never accesses
-# a board.
+# ZCU216 retains the legacy full-build default. RFSoC4x2 defaults to creating and validating a
+# project/block design only, so it can be opened in Vivado without starting a build. Set the normal
+# RISCQ_RUN_* stage flags to request synthesis, implementation, or a bitstream.
 #
 # Usage:
 #   ./build-riscvsoc-bd.sh                    # zcu216-14q config, full floorplan, synth+impl+bitstream+xsa
@@ -33,15 +31,15 @@
 #   RISCQ_CONFIG=software/configs/sim-2q.json ./build-riscvsoc-bd.sh # a different SocParams JSON
 #   RISCQ_SKIP_GEN=1   ./build-riscvsoc-bd.sh # reuse the RTL already in the build dir (skip mill)
 #   RISCQ_PROJ_NAME=foo ./build-riscvsoc-bd.sh # build into <repo>/build/foo (parallel designs)
-#   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BOARD_REPO=/path/to/boards ./build-riscvsoc-bd.sh # validation only
-#   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BUILD_MODE=synthesis RISCQ_BOARD_REPO=/path/to/boards \
-#     ./build-riscvsoc-bd.sh # explicit synthesis-only checkpoint
-#   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BUILD_MODE=deployment RISCQ_BOARD_REPO=/path/to/boards \
-#     ./build-riscvsoc-bd.sh # explicit implementation + routed signoff + bit/HWH checkpoint
+#   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BOARD_REPO=/path/to/boards ./build-riscvsoc-bd.sh # BD only
+#   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BOARD_REPO=/path/to/boards RISCQ_RUN_SYNTH=1 \
+#     ./build-riscvsoc-bd.sh # generate targets and synthesize
+#   RISCQ_PLATFORM=rfsoc4x2 RISCQ_BOARD_REPO=/path/to/boards RISCQ_RUN_BITSTREAM=1 \
+#     ./build-riscvsoc-bd.sh # synthesize, implement, and write bit/HWH
 #
 # Env: RISCQ_VIVADO_BIN, RISCQ_CONFIG (default software/configs/zcu216-14q.json), RISCQ_SKIP_GEN,
-#   RISCQ_BUILD_MODE (validation|synthesis|deployment|full; defaults validation on RFSoC4x2 and full on ZCU216),
-#   RISCQ_RUN_BITSTREAM (legacy ZCU216 full mode: default 1; set 0 for impl-only),
+#   RISCQ_GENERATE_TARGETS, RISCQ_RUN_SYNTH, RISCQ_RUN_IMPL, RISCQ_RUN_BITSTREAM
+#   (all default off on RFSoC4x2; ZCU216 retains its full-build defaults),
 #   RISCQ_PROJ_NAME (default riscvsoc-bd), plus the floorplan knobs read by pblocks-bd.tcl:
 #   RISCQ_{ROW,PERROW,CONFINE}, RISCQ_BD_BASE, and RISCQ_PLACE_DIRECTIVE (default ExtraNetDelay_high —
 #   the placer directive). RISCQ_MREG_LOCK=1 freezes the carrierGen ComplexMul product DSPs against
@@ -52,6 +50,10 @@ BD_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # vivado-scripts/riscvs
 REPO_DIR="$(cd "$BD_DIR/../.." && pwd)"                  # agentic-rv-dev (repo root)
 VIVADO_BIN="${RISCQ_VIVADO_BIN:-$(dirname "$(command -v vivado)")}"
 PLATFORM="${RISCQ_PLATFORM:-zcu216}"
+if [[ -v RISCQ_BUILD_MODE || -v RISCQ_VALIDATE_ONLY ]]; then
+  echo "[riscvsoc-bd] RISCQ_BUILD_MODE and RISCQ_VALIDATE_ONLY are no longer used; set RISCQ_RUN_SYNTH, RISCQ_RUN_IMPL, or RISCQ_RUN_BITSTREAM instead" >&2
+  exit 2
+fi
 case "$PLATFORM" in
   zcu216)
     DEFAULT_CONFIG="$REPO_DIR/software/configs/zcu216-14q.json"
@@ -63,38 +65,6 @@ case "$PLATFORM" in
     ;;
   *)
     echo "[riscvsoc-bd] unsupported RISCQ_PLATFORM '$PLATFORM' (expected zcu216 or rfsoc4x2)" >&2
-    exit 2
-    ;;
-esac
-if [ -n "${RISCQ_BUILD_MODE:-}" ]; then
-  BUILD_MODE="$RISCQ_BUILD_MODE"
-elif [ "$PLATFORM" = "rfsoc4x2" ]; then
-  BUILD_MODE="validation"
-else
-  BUILD_MODE="full"
-fi
-case "$BUILD_MODE" in
-  validation) ;;
-  synthesis)
-    if [ "$PLATFORM" != "rfsoc4x2" ]; then
-      echo "[riscvsoc-bd] synthesis checkpoint mode is RFSoC4x2-only" >&2
-      exit 2
-    fi
-    ;;
-  deployment)
-    if [ "$PLATFORM" != "rfsoc4x2" ]; then
-      echo "[riscvsoc-bd] deployment checkpoint mode is RFSoC4x2-only" >&2
-      exit 2
-    fi
-    ;;
-  full)
-    if [ "$PLATFORM" = "rfsoc4x2" ]; then
-      echo "[riscvsoc-bd] RFSoC4x2 full builds are disabled; use RISCQ_BUILD_MODE=validation" >&2
-      exit 2
-    fi
-    ;;
-  *)
-    echo "[riscvsoc-bd] unsupported RISCQ_BUILD_MODE '$BUILD_MODE' (expected validation, synthesis, deployment, or full)" >&2
     exit 2
     ;;
 esac
@@ -117,72 +87,25 @@ fi
 export RISCQ_PROJ_NAME="$PROJ"
 export RISCQ_BUILD_DIR="$BUILD"
 export RISCQ_PLATFORM="$PLATFORM"
-export RISCQ_BUILD_MODE="$BUILD_MODE"
-if [ "$BUILD_MODE" = "validation" ]; then
-  export RISCQ_VALIDATE_ONLY=1
-  export RISCQ_GENERATE_TARGETS=0
-  export RISCQ_RUN_SYNTH=0
-  export RISCQ_RUN_IMPL=0
-  export RISCQ_RUN_BITSTREAM=0
-  unset RISCQ_PBLOCK RISCQ_PBLOCK_TCL RISCQ_IP_RETIMING RISCQ_CSET_THRESH RISCQ_PLACE_DIRECTIVE
-  echo "[riscvsoc-bd] validating block design in $BUILD (no targets, runs, synthesis, implementation, bitstream, or XSA) …"
-elif [ "$BUILD_MODE" = "synthesis" ]; then
-  export RISCQ_RFSOC4X2_SYNTHESIS_OPT_IN=1
-  export RISCQ_VALIDATE_ONLY=0
-  export RISCQ_GENERATE_TARGETS=1
-  export RISCQ_RUN_SYNTH=1
-  export RISCQ_RUN_IMPL=0
-  export RISCQ_RUN_BITSTREAM=0
-  unset RISCQ_PBLOCK RISCQ_PBLOCK_TCL RISCQ_IP_RETIMING RISCQ_CSET_THRESH RISCQ_PLACE_DIRECTIVE
-  echo "[riscvsoc-bd] RFSoC4x2 SYNTHESIS-ONLY opt-in: targets + required OOC/top synthesis; no implementation, bitstream, or XSA …"
-elif [ "$BUILD_MODE" = "deployment" ]; then
-  unset RISCQ_RFSOC4X2_SYNTHESIS_OPT_IN
-  export RISCQ_RFSOC4X2_DEPLOYMENT_OPT_IN=1
-  export RISCQ_VALIDATE_ONLY=0
-  export RISCQ_GENERATE_TARGETS=1
-  export RISCQ_RUN_SYNTH=1
-  export RISCQ_RUN_IMPL=1
-  export RISCQ_RUN_BITSTREAM=1
-  unset RISCQ_PBLOCK RISCQ_PBLOCK_TCL RISCQ_IP_RETIMING RISCQ_CSET_THRESH RISCQ_PLACE_DIRECTIVE
-  echo "[riscvsoc-bd] RFSoC4x2 DEPLOYMENT opt-in: OOC/top synthesis + implementation + routed signoff + bit/HWH; NO BOARD ACCESS …"
-else
-  unset RISCQ_RFSOC4X2_SYNTHESIS_OPT_IN
-  unset RISCQ_RFSOC4X2_DEPLOYMENT_OPT_IN
-  export RISCQ_VALIDATE_ONLY=0
-  export RISCQ_GENERATE_TARGETS=1
+if [ "$PLATFORM" = "zcu216" ]; then
   export RISCQ_PBLOCK=1
   export RISCQ_PBLOCK_TCL="$BD_DIR/pblocks-bd.tcl"
   export RISCQ_IP_RETIMING=1
   export RISCQ_PLACE_DIRECTIVE="${RISCQ_PLACE_DIRECTIVE:-ExtraNetDelay_high}"
-  export RISCQ_RUN_SYNTH=1
-  export RISCQ_RUN_IMPL=1
-  export RISCQ_RUN_BITSTREAM="${RISCQ_RUN_BITSTREAM:-1}"
-  echo "[riscvsoc-bd] building block design in $BUILD (floorplan, IP retiming, place=$RISCQ_PLACE_DIRECTIVE / route=AggressiveExplore, bitstream+xsa=$RISCQ_RUN_BITSTREAM) …"
+  echo "[riscvsoc-bd] building ZCU216 block design in $BUILD …"
+else
+  unset RISCQ_PBLOCK RISCQ_PBLOCK_TCL RISCQ_IP_RETIMING RISCQ_CSET_THRESH RISCQ_PLACE_DIRECTIVE
+  echo "[riscvsoc-bd] creating RFSoC4x2 block design in $BUILD …"
 fi
 "$VIVADO_BIN/vivado" -nojournal -mode batch -log "$BUILD/vivado.log" -source "$BD_DIR/flow-bd.tcl"
 
 echo "[riscvsoc-bd] ===================================================================="
 echo "[riscvsoc-bd] done. reports in $BUILD"
-if [ "$BUILD_MODE" = "validation" ]; then
-  echo "[riscvsoc-bd] validation-only flow complete; no build runs were requested"
-elif [ "$BUILD_MODE" = "synthesis" ]; then
-  echo "[riscvsoc-bd] synthesis-only checkpoint complete; implementation, bitstream, and XSA were not requested"
-  if [ -f "$BUILD/timing_synth.rpt" ]; then
-    echo "[riscvsoc-bd] synthesis timing summary: $BUILD/timing_synth.rpt"
-  fi
-elif [ "$BUILD_MODE" = "deployment" ]; then
-  echo "[riscvsoc-bd] deployment checkpoint complete; no board was accessed"
-  echo "[riscvsoc-bd] routed signoff: $BUILD/timing_impl.rpt / drc_impl.rpt / methodology_impl.rpt / cdc_impl.rpt"
-  echo "[riscvsoc-bd] bitstream: $BUILD/PulseTableSoc.bit"
-  echo "[riscvsoc-bd] PYNQ metadata: $BUILD/PulseTableSoc.hwh"
-else
-  if [ -f "$BUILD/timing_impl.rpt" ]; then
-    echo "[riscvsoc-bd] impl WNS/TNS (timing_impl.rpt):"
-    grep -m2 -E "WNS|TNS|Worst Negative|Total Negative" "$BUILD/timing_impl.rpt" | sed 's/^/[riscvsoc-bd]   /' || true
-  else
-    echo "[riscvsoc-bd] (no timing_impl.rpt — see $BUILD/vivado.log)"
-  fi
-  [ -f "$BUILD/PulseTableSoc.bit" ] && echo "[riscvsoc-bd] bitstream: $BUILD/PulseTableSoc.bit"
-  [ -f "$BUILD/PulseTableSoc.xsa" ] && echo "[riscvsoc-bd] hardware platform: $BUILD/PulseTableSoc.xsa"
-  echo "[riscvsoc-bd] compare against ../riscvsoc (OOC, ~ −0.156 ns). util_impl.rpt holds the per-pblock view."
+echo "[riscvsoc-bd] Vivado project: $BUILD"
+if [ -f "$BUILD/timing_impl.rpt" ]; then
+  echo "[riscvsoc-bd] impl WNS/TNS (timing_impl.rpt):"
+  grep -m2 -E "WNS|TNS|Worst Negative|Total Negative" "$BUILD/timing_impl.rpt" | sed 's/^/[riscvsoc-bd]   /' || true
 fi
+[ -f "$BUILD/PulseTableSoc.bit" ] && echo "[riscvsoc-bd] bitstream: $BUILD/PulseTableSoc.bit"
+[ -f "$BUILD/PulseTableSoc.hwh" ] && echo "[riscvsoc-bd] PYNQ metadata: $BUILD/PulseTableSoc.hwh"
+[ -f "$BUILD/PulseTableSoc.xsa" ] && echo "[riscvsoc-bd] hardware platform: $BUILD/PulseTableSoc.xsa"

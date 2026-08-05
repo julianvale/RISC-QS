@@ -1,9 +1,10 @@
 # `riscvsoc-bd/` — ZCU216 and RFSoC 4x2 block-design flow
 
 The flow is platform-selectable. `zcu216` remains the legacy floorplanned implementation flow;
-`rfsoc4x2` is the Real Digital RFSoC 4x2 NV proof-of-concept and defaults to a validation-only flow.
+`rfsoc4x2` is the Real Digital RFSoC 4x2 NV proof-of-concept and defaults to creating a block design
+that can be inspected in Vivado without synthesis.
 
-## RFSoC 4x2 validation
+## RFSoC 4x2 block-design inspection
 
 ```bash
 RISCQ_PLATFORM=rfsoc4x2 \
@@ -11,40 +12,39 @@ RISCQ_BOARD_REPO=/path/to/vivado_boards \
 ./build-riscvsoc-bd.sh
 ```
 
-The board repository is the directory containing `rfsoc4x2/1.0/board.xml`. RFSoC4x2 validation
+The board repository is the directory containing `rfsoc4x2/1.0/board.xml`. This command
 packages the configured one-core IP, constructs and validates the block design, and creates the HDL
-wrapper. It explicitly skips `generate_target`, IP/OOC run creation, synthesis, implementation,
-bitstream, and XSA export.
+wrapper. It skips `generate_target`, IP/OOC run creation, synthesis, implementation, bitstream, and
+XSA export. Open the project under `build/rfsoc4x2-nv/` in Vivado to inspect the resulting design.
 
-RFSoC4x2 synthesis is a separate, conspicuous opt-in:
+To synthesize the block design, enable its normal synthesis stage:
 
 ```bash
 RISCQ_PLATFORM=rfsoc4x2 \
-RISCQ_BUILD_MODE=synthesis \
+RISCQ_RUN_SYNTH=1 \
 RISCQ_BOARD_REPO=/path/to/vivado_boards \
 ./build-riscvsoc-bd.sh
 ```
 
-This mode generates required output products, explicitly runs the BD's OOC IP synthesis runs (including
+This generates required output products, explicitly runs the BD's OOC IP synthesis runs (including
 the packaged RISC-Q top), runs `synth_1`, and writes synthesis timing/resource/clock/CDC/methodology reports.
-It forces pblocks, legacy ZCU216 IP retiming, implementation, bitstream, and XSA generation off.
-`RISCQ_BUILD_MODE=full` remains rejected for RFSoC4x2.
+It does not enable the ZCU216 floorplan or IP-retiming settings.
 
-RFSoC4x2 implementation and deployment artifacts require a second, separate opt-in:
+To produce a bitstream and matching HWH metadata, enable the final stage:
 
 ```bash
 RISCQ_PLATFORM=rfsoc4x2 \
-RISCQ_BUILD_MODE=deployment \
+RISCQ_RUN_BITSTREAM=1 \
 RISCQ_BOARD_REPO=/path/to/vivado_boards \
 ./build-riscvsoc-bd.sh
 ```
 
-Deployment runs OOC/top synthesis and implementation, stops at the routed design for setup/hold,
+The bitstream stage implies implementation, synthesis, and target generation. It stops at the routed design for setup/hold,
 DRC, methodology, CDC, clock, route, resource, and warning review, and blocks bitstream generation on
 negative setup/hold slack, error/critical DRC violations, missing required clocks, or unrouted nets.
 Only after those gates pass does it write matching `PulseTableSoc.bit` and PYNQ-readable
 `PulseTableSoc.hwh` artifacts. It does not export an XSA and contains no board-programming, overlay,
-clock-chip, MMIO, firmware, or other board-access step. `RISCQ_BUILD_MODE=full` remains disabled.
+clock-chip, MMIO, firmware, or other board-access step.
 
 RFSoC4x2 uses PS `pl_clk0` at nominal 100 MHz (Vivado metadata: 99,999,985 Hz) for host/control AXI and
 RFDC `clk_dac0` at 491.52 MHz for the

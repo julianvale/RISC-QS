@@ -109,10 +109,10 @@ if {$RUN_IMPL} {
     set_property STEPS.PLACE_DESIGN.TCL.PRE $_ppre [get_runs impl_1]
     puts "\[run\] pblock floorplan: $_ppre (RISCQ_PBLOCK=$::env(RISCQ_PBLOCK))"
   }
-  # RFSoC4x2 deployment stops at a routed checkpoint first. Reports and hard timing/DRC/clock gates
+  # RFSoC4x2 bitstream builds stop at a routed checkpoint first. Reports and hard timing/DRC/clock gates
   # must pass before write_bitstream is allowed to run.
-  set _rfsoc4x2_deployment [expr {$PLATFORM eq "rfsoc4x2" && $BUILD_MODE eq "deployment"}]
-  if {$_rfsoc4x2_deployment} {
+  set _rfsoc4x2_bitstream [expr {$PLATFORM eq "rfsoc4x2" && $RUN_BITSTREAM}]
+  if {$_rfsoc4x2_bitstream} {
     set_property STEPS.PLACE_DESIGN.ARGS.DIRECTIVE ExtraNetDelay_high [get_runs impl_1]
     launch_runs impl_1 -to_step {phys_opt_design (Post-Route)} -jobs 1
   } elseif {$RUN_BITSTREAM} {
@@ -121,10 +121,10 @@ if {$RUN_IMPL} {
     launch_runs impl_1 -jobs 1
   }
   wait_on_run impl_1
-  # A deployment run deliberately stops at post-route phys_opt, so Vivado leaves write_bitstream as
+  # A bitstream run deliberately stops at post-route phys_opt, so Vivado leaves write_bitstream as
   # the next unstarted step and reports less than 100% progress. A successful wait_on_run plus the
-  # routed signoff gates below are authoritative for that mode.
-  if {!$_rfsoc4x2_deployment && [get_property PROGRESS [get_runs impl_1]] != "100%"} {
+  # routed signoff gates below are authoritative for that path.
+  if {!$_rfsoc4x2_bitstream && [get_property PROGRESS [get_runs impl_1]] != "100%"} {
     error "implementation failed — see $BUILD_DIR/$PRJ.runs/impl_1"
   }
   open_run impl_1
@@ -144,7 +144,7 @@ if {$RUN_IMPL} {
     set CONES_DIR $BUILD_DIR
     source $SCRIPT_DIR/../report-cones.tcl
   } _ce]} { puts "\[run\] WARN: report-cones failed: $_ce" }
-  if {$_rfsoc4x2_deployment} {
+  if {$_rfsoc4x2_bitstream} {
     foreach _clock_name {RFDAC0_CLK clk_pl_0} {
       if {[llength [get_clocks -quiet $_clock_name]] != 1} {
         error "routed clock failure: expected exactly one $_clock_name clock"
@@ -171,7 +171,7 @@ if {$RUN_IMPL} {
     }
   }
   puts "\[run\] implementation OK — routed reports in $BUILD_DIR"
-  if {$_rfsoc4x2_deployment} {
+  if {$_rfsoc4x2_bitstream} {
     write_bitstream -force $BUILD_DIR/$TOP_MODULE.bit
     write_debug_probes -force $BUILD_DIR/$TOP_MODULE.ltx
     if {![file exists $BUILD_DIR/$TOP_MODULE.ltx] || [file size $BUILD_DIR/$TOP_MODULE.ltx] == 0} {

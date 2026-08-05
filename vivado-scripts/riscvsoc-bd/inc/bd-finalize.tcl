@@ -5,7 +5,7 @@ make_wrapper -files [get_files $BD_NAME.bd] -top -import -force
 if {$GENERATE_TARGETS} {
   generate_target all [get_files $BD_NAME.bd]
 } else {
-  puts "\[bd-finalize\] validation-only: skipped generate_target"
+  puts "\[bd-finalize\] block-design-only: skipped generate_target"
 }
 close_bd_design $BD_NAME
 
