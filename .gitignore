@@ -18,3 +18,4 @@ BASIC_MISTAKES.md
 .Xil/
 .venv
 data/
+sim_build/
