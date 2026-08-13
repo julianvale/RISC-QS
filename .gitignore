@@ -17,3 +17,4 @@ BASIC_MISTAKES.md
 /src/scratch
 .Xil/
 .venv
+data/

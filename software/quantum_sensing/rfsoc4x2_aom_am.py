@@ -52,7 +52,7 @@ def readout_table(m) -> ParamTable:
     })
 
 
-@kernel # pyright: ignore
+@kernel
 def k_aom_am(ro: ParamTable, out: Array, duration: int):
     """Fire the AM AOM pulse and return [scheduled_start, duration_batches]."""
     init_pulse_params(ro.pulses)  # noqa: F821

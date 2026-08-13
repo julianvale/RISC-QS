@@ -2,7 +2,7 @@ import numpy as np
 
 from riscq.map import SocMap, SocParams
 from riscq.pulses import units
-from software.riscq.quantum_sensing.rfsoc4x2_aom_am import (CARRIER_HZ, ENV_LINES, LOW_AMP_CODE,
+from software.quantum_sensing.rfsoc4x2_aom_am import (CARRIER_HZ, ENV_LINES, LOW_AMP_CODE,
                                    MODULATION_CYCLES, PULSE_BATCHES, am_envelope,
                                    build_program, modulation_hz)
 

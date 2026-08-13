@@ -17,6 +17,7 @@ laser trigger, not copied from the PulseBlaster's DAQ gate.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import os
 import time
@@ -367,19 +368,56 @@ def save_and_plot(frequencies_hz: list[float], reference_mean: np.ndarray, signa
                   output: Path, plot: Path, *, half_duration_batches: int,
                   laser_start_batches: int, laser_duration_batches: int,
                   readout_delay_batches: int, readout_window_batches: int,
-                  warmup_pairs: int, samples_per_frequency: int, reset_pulses: int = 0) -> None:
-    """Save qdSpectro-order means and plot fluorescence plus contrast."""
+                  warmup_pairs: int, samples_per_frequency: int, reset_pulses: int = 0,
+                  post_reset_settle_batches: int = 0, mw_enabled: bool = True,
+                  laser_enabled: bool = True,
+                  experiment_metadata: dict[str, object] | None = None) -> None:
+    """Save data, run parameters, a JSON sidecar, and the summary plot."""
     ratio, ratio_sem, ratio_by_run = summarize_runs(reference_mean, signal_mean)
     positive_contrast = 1.0 - ratio
     output.parent.mkdir(parents=True, exist_ok=True)
-    np.savez(output, frequencies_hz=np.asarray(frequencies_hz), reference_mean=reference_mean,
-             signal_mean=signal_mean, ratio_signal_over_reference=ratio,
-             ratio_signal_over_reference_sem=ratio_sem, ratio_by_run=ratio_by_run,
-             positive_contrast=positive_contrast, half_duration_batches=half_duration_batches,
-             laser_start_batches=laser_start_batches, laser_duration_batches=laser_duration_batches,
-             readout_delay_batches=readout_delay_batches, readout_window_batches=readout_window_batches,
-             warmup_pairs=warmup_pairs, samples_per_frequency=samples_per_frequency,
-             reset_pulses=reset_pulses)
+    metadata = {
+        "schema_version": 1,
+        "experiment": "nv_pulsed_esr_halfmw",
+        "output_file": str(output),
+        "plot_file": str(plot),
+        "frequency_start_hz": float(frequencies_hz[0]),
+        "frequency_stop_hz": float(frequencies_hz[-1]),
+        "frequency_steps": len(frequencies_hz),
+        "averages": int(reference_mean.shape[0]),
+        "half_duration_batches": int(half_duration_batches),
+        "laser_start_batches": int(laser_start_batches),
+        "laser_duration_batches": int(laser_duration_batches),
+        "readout_delay_batches": int(readout_delay_batches),
+        "readout_window_batches": int(readout_window_batches),
+        "warmup_pairs": int(warmup_pairs),
+        "samples_per_frequency": int(samples_per_frequency),
+        "reset_pulses": int(reset_pulses),
+        "post_reset_settle_batches": int(post_reset_settle_batches),
+        "mw_enabled": bool(mw_enabled),
+        "laser_enabled": bool(laser_enabled),
+    }
+    if experiment_metadata is not None:
+        metadata.update(experiment_metadata)
+    metadata_json = json.dumps(metadata, indent=2, sort_keys=True)
+
+    archive = {
+        "frequencies_hz": np.asarray(frequencies_hz),
+        "reference_mean": reference_mean,
+        "signal_mean": signal_mean,
+        "ratio_signal_over_reference": ratio,
+        "ratio_signal_over_reference_sem": ratio_sem,
+        "ratio_by_run": ratio_by_run,
+        "positive_contrast": positive_contrast,
+        "experiment_metadata_json": metadata_json,
+    }
+    # Retain parameters as scalar NPZ entries for convenient programmatic use;
+    # the sidecar contains the identical information in human-readable form.
+    for key, value in metadata.items():
+        if value is not None and isinstance(value, (bool, int, float, str)):
+            archive[key] = value
+    np.savez(output, **archive)
+    output.with_suffix(".json").write_text(metadata_json + "\n", encoding="utf-8")
     try:
         import matplotlib.pyplot as plt
     except ImportError as exc:
@@ -390,7 +428,11 @@ def save_and_plot(frequencies_hz: list[float], reference_mean: np.ndarray, signa
     fig, (ax_signal, ax_contrast) = plt.subplots(
         2, 1, sharex=True, layout="constrained", figsize=(8, 7),
     )
-    ax_signal.plot(frequency_ghz, signal, ".-", linewidth=0.8, markersize=3, label="signal (MW on)")
+    if not laser_enabled:
+        signal_label = "signal position (laser disabled)"
+    else:
+        signal_label = "signal (MW on)" if mw_enabled else "signal position (MW disabled)"
+    ax_signal.plot(frequency_ghz, signal, ".-", linewidth=0.8, markersize=3, label=signal_label)
     ax_signal.plot(frequency_ghz, reference, ".-", linewidth=0.8, markersize=3,
                    label="reference (MW off)", alpha=0.8)
     ax_signal.set(ylabel="mean ADC code", title="Signal and reference")
@@ -442,7 +484,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if not args.host:
         parser.error("--host is required when BOARD_IP is not set")
-    _, frequencies_hz, reference_mean, signal_mean = acquire_scan(
+    acquisition_started_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    m, frequencies_hz, reference_mean, signal_mean = acquire_scan(
         args.host, port=args.port, start_hz=args.start_hz, stop_hz=args.stop_hz,
         frequency_steps=args.frequency_steps, mw_amp=args.mw_amp,
         half_duration_batches=args.half_duration_batches, laser_start_batches=args.laser_start_batches,
@@ -451,6 +494,7 @@ def main(argv=None):
         samples_per_frequency=args.samples_per_frequency, averages=args.averages,
         reset_pulses=args.reset_pulses, timeout_s=args.timeout_s,
     )
+    acquisition_completed_at = datetime.now().astimezone().isoformat(timespec="seconds")
     save_and_plot(frequencies_hz, reference_mean, signal_mean, args.output, args.plot,
                   half_duration_batches=args.half_duration_batches,
                   laser_start_batches=args.laser_start_batches,
@@ -458,9 +502,21 @@ def main(argv=None):
                   readout_delay_batches=args.readout_delay_batches,
                   readout_window_batches=args.readout_window_batches,
                   warmup_pairs=args.warmup_pairs, samples_per_frequency=args.samples_per_frequency,
-                  reset_pulses=args.reset_pulses)
+                  reset_pulses=args.reset_pulses,
+                  experiment_metadata={
+                      "acquisition_started_at": acquisition_started_at,
+                      "acquisition_completed_at": acquisition_completed_at,
+                      "platform": m.params.name,
+                      "host": args.host,
+                      "port": args.port,
+                      "timeout_s": args.timeout_s,
+                      "mw_amp": args.mw_amp,
+                      "mw_amp_code": int(units.amp_to_code(args.mw_amp)),
+                  })
+    metadata_output = args.output.with_suffix(".json")
     print(f"saved {args.averages} ascending scans of {args.frequency_steps} frequencies; "
-          f"{args.samples_per_frequency} pairs/frequency to {args.output} and {args.plot}")
+          f"{args.samples_per_frequency} pairs/frequency to {args.output}, {metadata_output}, "
+          f"and {args.plot}")
 
 
 if __name__ == "__main__":

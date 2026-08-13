@@ -18,7 +18,7 @@ from riscq.map import SocMap, SocParams
 
 # 491.52 MHz / (2 * 128) = 1.92 MHz.  49,152 ticks = 100 us at 491.52 MHz.
 DEFAULT_HALF_PERIOD = 128
-DEFAULT_DURATION = 100
+DEFAULT_DURATION = 128
 SCHEDULE_LEAD = 2_048
 SETTLE_TICKS = 64
 

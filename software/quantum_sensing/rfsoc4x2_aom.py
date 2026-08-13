@@ -15,13 +15,14 @@ from riscq.driver.remote import RemoteDriver
 from riscq.lang import Array, ParamTable, compile_kernel, kernel
 from riscq.map import READOUT_LEAD, SocMap, SocParams
 from riscq.pulses import Pulse, envelopes, units
+from typing import no_type_check
 
 
 ENV_LINES = 1024
 CARRIER_HZ = 80e6
 PULSE_BATCHES = 65500
 AMP_CODE = 7000
-AMP = AMP_CODE / units.AMP_SCALE
+AMP = 0.3
 SCHEDULE_LEAD = 2048
 
 
@@ -38,18 +39,18 @@ def readout_table(m) -> ParamTable:
         "aom": Pulse(carrier_envelope(m), freq_hz=CARRIER_HZ, amp=AMP),
     })
 
-
+@no_type_check
 @kernel
 def k_aom(ro: ParamTable, out: Array, duration: int):
     """Fire the unmodulated AOM pulse and return [scheduled_start, duration_batches]."""
-    init_pulse_params(ro.pulses)  # noqa: F821
-    set_freq(ro, ro.freq)  # noqa: F821  initialize the 80 MHz carrier explicitly
-    set_start(ro, now())  # noqa: F821
+    init_pulse_params(ro.pulses)
+    set_freq(ro, ro.freq) # initialize the 80 MHz carrier explicitly
+    set_start(ro, now())
     # The constant 1024-line envelope wraps during the longer pulse without modulation.
-    set_dur(ro, ro["aom"], duration << 16)  # noqa: F821
-    start = now() + SCHEDULE_LEAD  # noqa: F821
-    play(ro, ro["aom"], start)  # noqa: F821
-    wait_until(start + duration + READOUT_LEAD)  # noqa: F821
+    set_dur(ro, ro["aom"], duration << 16)
+    start = now() + SCHEDULE_LEAD  
+    play(ro, ro["aom"], start) 
+    wait_until(start + duration + READOUT_LEAD)
     out[0] = start
     out[1] = duration
 
