@@ -2,7 +2,8 @@
 
 At each microwave frequency, the resident kernel normally repeats one 2-us
 cycle: one MW-on signal half and one MW-off reference half.  The optional
-reset diagnostic inserts unrecorded laser triggers between those two shots.
+matched-reset preparation gives both acquired shots the same unrecorded optical
+reset train before their respective readout events.
 It returns only the accumulated signal/reference sums, just as qdSpectro
 reduces each finite DAQ read to one mean pair.  The host scans frequency in
 ascending order and then repeats the complete scan for the requested number
@@ -17,7 +18,6 @@ laser trigger, not copied from the PulseBlaster's DAQ gate.
 from __future__ import annotations
 
 import argparse
-import json
 import math
 import os
 import time
@@ -32,6 +32,7 @@ from riscq.driver.remote import RemoteDriver
 from riscq.lang import Array, ParamTable, compile_kernel, kernel
 from riscq.map import READOUT_LEAD, READOUT_MAX_WIN_LOG2, SocMap, SocParams
 from riscq.pulses import Pulse, envelopes, units
+from software.quantum_sensing.nv_common import inclusive_linear_grid, s32, write_metadata_sidecar
 
 
 # This is required only to prime the first two pairs.  Thereafter, the kernel
@@ -168,18 +169,14 @@ def k_pulsed_esr_halfmw(mw: ParamTable, demod: ParamTable, out: Array,
 
 @no_type_check
 @kernel
-def k_pulsed_esr_halfmw_resets(mw: ParamTable, demod: ParamTable, out: Array,
-                               half_duration_batches: int, laser_start_batches: int,
-                               laser_duration_batches: int, readout_delay_batches: int,
-                               readout_window_batches: int, mw_freq_code: int,
-                               mw_amp_code: int, warmup_pairs: int,
-                               samples_per_frequency: int, reset_pulses: int):
-    """Measure MW-on signal, reset optically, then measure MW-off reference.
-
-    The reset triggers are deliberately not accompanied by an integration gate
-    or ``read_res``.  This diagnostic is serial so a many-pulse reset cannot
-    overflow the depth-four laser TimedQueue.
-    """
+def k_pulsed_esr_halfmw_symmetric_reset(
+        mw: ParamTable, demod: ParamTable, out: Array,
+        half_duration_batches: int, laser_start_batches: int,
+        laser_duration_batches: int, readout_delay_batches: int,
+        readout_window_batches: int, mw_freq_code: int, mw_amp_code: int,
+        warmup_pairs: int, samples_per_frequency: int, reset_pulses: int,
+        post_reset_settle_batches: int):
+    """Accumulate a frequency point with identical reset history per shot."""
     init_pulse_params(mw.pulses)  # noqa: F821
     init_pulse_params(demod.pulses)  # noqa: F821
     set_freq(mw, mw_freq_code)  # noqa: F821
@@ -194,9 +191,18 @@ def k_pulsed_esr_halfmw_resets(mw: ParamTable, demod: ParamTable, out: Array,
     signal_sum = 0
     reference_sum = 0
     while pair < total_pairs:
-        # Identical MW-on signal half to the existing experiment.
-        signal_start = now() + SCHEDULE_LEAD  # noqa: F821
-        signal_laser = signal_start + laser_start_batches
+        # Each wait retires its laser entry, so long reset trains remain within
+        # the depth-four queue.  Only the following recorded pulse is read.
+        reset_laser = now() + SCHEDULE_LEAD + laser_start_batches  # noqa: F821
+        reset_index = 0
+        while reset_index < reset_pulses:
+            play_laser(LASER_HALF_PERIOD, laser_duration_batches, LASER_CW, reset_laser)  # noqa: F821
+            wait_until(reset_laser + laser_duration_batches)  # noqa: F821
+            reset_laser = reset_laser + half_duration_batches
+            reset_index += 1
+
+        signal_laser = reset_laser + post_reset_settle_batches
+        signal_start = signal_laser - laser_start_batches
         signal_window = signal_laser + readout_delay_batches
         play(mw, mw["mw"], signal_start)  # noqa: F821
         play_laser(LASER_HALF_PERIOD, laser_duration_batches, LASER_CW, signal_laser)  # noqa: F821
@@ -209,9 +215,10 @@ def k_pulsed_esr_halfmw_resets(mw: ParamTable, demod: ParamTable, out: Array,
             read_real()  # noqa: F821
         read_imag()  # noqa: F821
 
-        # The first reset takes the former reference-pulse slot.  Individual
-        # waits allow arbitrary reset counts without pre-queuing them all.
-        reset_laser = signal_laser + half_duration_batches
+        # An equally sized reset train precedes the independently acquired
+        # MW-off reference.  This is intentionally not the old asymmetric
+        # signal-then-reset-then-reference diagnostic.
+        reset_laser = now() + SCHEDULE_LEAD + laser_start_batches  # noqa: F821
         reset_index = 0
         while reset_index < reset_pulses:
             play_laser(LASER_HALF_PERIOD, laser_duration_batches, LASER_CW, reset_laser)  # noqa: F821
@@ -219,8 +226,7 @@ def k_pulsed_esr_halfmw_resets(mw: ParamTable, demod: ParamTable, out: Array,
             reset_laser = reset_laser + half_duration_batches
             reset_index += 1
 
-        # The sole MW-off laser trigger that is acquired as the reference.
-        reference_laser = reset_laser
+        reference_laser = reset_laser + post_reset_settle_batches
         reference_window = reference_laser + readout_delay_batches
         play_laser(LASER_HALF_PERIOD, laser_duration_batches, LASER_CW, reference_laser)  # noqa: F821
         play(demod, demod["window"], reference_window)  # noqa: F821
@@ -242,28 +248,27 @@ def build_program(m: SocMap):
     return compile_kernel(k_pulsed_esr_halfmw, m, tables={"mw": mw, "demod": demod}, out=Array(2))
 
 
-def build_reset_program(m: SocMap):
-    """Compile the serial reset-pulse diagnostic variant."""
+def build_symmetric_reset_program(m: SocMap):
+    """Compile the matched-reset preparation variant."""
     mw, demod = _tables(m)
-    return compile_kernel(k_pulsed_esr_halfmw_resets, m, tables={"mw": mw, "demod": demod}, out=Array(2))
+    return compile_kernel(
+        k_pulsed_esr_halfmw_symmetric_reset, m,
+        tables={"mw": mw, "demod": demod}, out=Array(2),
+    )
 
 
 def frequency_grid(start_hz: float, stop_hz: float, steps: int) -> list[float]:
     """Inclusive ascending grid, matching ``np.linspace(..., endpoint=True)``."""
-    if not all(math.isfinite(value) and value > 0 for value in (start_hz, stop_hz)):
-        raise ValueError("frequency start and stop must be positive finite values")
-    if steps < 1:
-        raise ValueError("frequency-steps must be positive")
-    if steps > 1 and stop_hz <= start_hz:
-        raise ValueError("frequency-stop-hz must exceed frequency-start-hz when steps is greater than one")
-    return [float(start_hz)] if steps == 1 else np.linspace(start_hz, stop_hz, steps).tolist()
+    return inclusive_linear_grid(start_hz, stop_hz, steps, name="frequency")
 
 
 def _validate(m: SocMap, frequencies_hz: list[float], mw_amp: float,
               half_duration_batches: int, laser_start_batches: int,
               laser_duration_batches: int, readout_delay_batches: int,
               readout_window_batches: int, warmup_pairs: int,
-              samples_per_frequency: int, averages: int, reset_pulses: int = 0) -> None:
+              samples_per_frequency: int, averages: int, *,
+              preparation: str = "continuous", reset_pulses: int = 0,
+              post_reset_settle_batches: int = 0) -> None:
     if m.params.name != "rfsoc4x2-nv-1q":
         raise RuntimeError("this experiment is only valid for the rfsoc4x2-nv-1q platform")
     if not frequencies_hz:
@@ -285,13 +290,14 @@ def _validate(m: SocMap, frequencies_hz: list[float], mw_amp: float,
         raise ValueError(f"samples-per-frequency must be in 1..{MAX_SAMPLES_PER_FREQUENCY}")
     if averages < 1:
         raise ValueError("averages must be positive")
-    if not 0 <= reset_pulses <= MAX_RESET_PULSES:
-        raise ValueError(f"reset-pulses must be in 0..{MAX_RESET_PULSES}")
-
-
-def _s32(value: int) -> int:
-    value &= 0xFFFF_FFFF
-    return value - (1 << 32) if value & (1 << 31) else value
+    if preparation not in ("continuous", "symmetric-reset"):
+        raise ValueError("preparation must be continuous or symmetric-reset")
+    if preparation == "continuous" and reset_pulses != 0:
+        raise ValueError("reset-pulses requires preparation=symmetric-reset")
+    if preparation == "symmetric-reset" and not 1 <= reset_pulses <= MAX_RESET_PULSES:
+        raise ValueError(f"reset-pulses must be in 1..{MAX_RESET_PULSES} for symmetric-reset preparation")
+    if post_reset_settle_batches < 0:
+        raise ValueError("post-reset settle must be non-negative")
 
 
 def summarize_runs(reference_mean: np.ndarray, signal_mean: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -318,7 +324,8 @@ def acquire_scan(host: str, *, port: int = 9091, start_hz: float = DEFAULT_START
                  readout_delay_batches: int = DEFAULT_READOUT_DELAY_BATCHES,
                  readout_window_batches: int = DEFAULT_READOUT_WINDOW_BATCHES,
                  warmup_pairs: int = 0, samples_per_frequency: int = DEFAULT_SAMPLES_PER_FREQUENCY,
-                 averages: int = DEFAULT_AVERAGES, reset_pulses: int = 0,
+                 averages: int = DEFAULT_AVERAGES, preparation: str = "continuous",
+                 reset_pulses: int = 0, post_reset_settle_batches: int = 0,
                  timeout_s: float = 2.0) -> tuple[SocMap, list[float], np.ndarray, np.ndarray]:
     """Acquire qdSpectro-order means shaped ``(averages, frequency)``."""
     if not host.strip():
@@ -333,8 +340,10 @@ def acquire_scan(host: str, *, port: int = 9091, start_hz: float = DEFAULT_START
         m = SocMap(SocParams.from_json(drv.board.get_params()))
         _validate(m, frequencies_hz, mw_amp, half_duration_batches, laser_start_batches,
                   laser_duration_batches, readout_delay_batches, readout_window_batches,
-                  warmup_pairs, samples_per_frequency, averages, reset_pulses)
-        program = build_reset_program(m) if reset_pulses else build_program(m)
+                  warmup_pairs, samples_per_frequency, averages,
+                  preparation=preparation, reset_pulses=reset_pulses,
+                  post_reset_settle_batches=post_reset_settle_batches)
+        program = build_symmetric_reset_program(m) if preparation == "symmetric-reset" else build_program(m)
         shared = {
             "half_duration_batches": half_duration_batches,
             "laser_start_batches": laser_start_batches,
@@ -345,8 +354,11 @@ def acquire_scan(host: str, *, port: int = 9091, start_hz: float = DEFAULT_START
             "warmup_pairs": warmup_pairs,
             "samples_per_frequency": samples_per_frequency,
         }
-        if reset_pulses:
-            shared["reset_pulses"] = reset_pulses
+        if preparation == "symmetric-reset":
+            shared.update(
+                reset_pulses=reset_pulses,
+                post_reset_settle_batches=post_reset_settle_batches,
+            )
         reference_mean = np.empty((averages, len(frequencies_hz)), dtype=float)
         signal_mean = np.empty_like(reference_mean)
         run.setup(drv, m, {0: program})
@@ -357,8 +369,8 @@ def acquire_scan(host: str, *, port: int = 9091, start_hz: float = DEFAULT_START
                     params={0: {**shared, "mw_freq_code": units.freq_to_code(frequency_hz, m.params)}},
                     results=["out"], timeout=max(1, math.ceil(timeout_s * 1000)),
                 )[0]["out"]
-                signal_mean[average_index, frequency_index] = _s32(int(result[0])) / samples_per_frequency
-                reference_mean[average_index, frequency_index] = _s32(int(result[1])) / samples_per_frequency
+                signal_mean[average_index, frequency_index] = s32(int(result[0])) / samples_per_frequency
+                reference_mean[average_index, frequency_index] = s32(int(result[1])) / samples_per_frequency
         return m, frequencies_hz, reference_mean, signal_mean
     finally:
         drv.close()
@@ -369,8 +381,8 @@ def save_and_plot(frequencies_hz: list[float], reference_mean: np.ndarray, signa
                   laser_start_batches: int, laser_duration_batches: int,
                   readout_delay_batches: int, readout_window_batches: int,
                   warmup_pairs: int, samples_per_frequency: int, reset_pulses: int = 0,
-                  post_reset_settle_batches: int = 0, mw_enabled: bool = True,
-                  laser_enabled: bool = True,
+                  post_reset_settle_batches: int = 0,
+                  preparation: str = "continuous",
                   experiment_metadata: dict[str, object] | None = None) -> None:
     """Save data, run parameters, a JSON sidecar, and the summary plot."""
     ratio, ratio_sem, ratio_by_run = summarize_runs(reference_mean, signal_mean)
@@ -394,12 +406,11 @@ def save_and_plot(frequencies_hz: list[float], reference_mean: np.ndarray, signa
         "samples_per_frequency": int(samples_per_frequency),
         "reset_pulses": int(reset_pulses),
         "post_reset_settle_batches": int(post_reset_settle_batches),
-        "mw_enabled": bool(mw_enabled),
-        "laser_enabled": bool(laser_enabled),
+        "preparation": preparation,
     }
     if experiment_metadata is not None:
         metadata.update(experiment_metadata)
-    metadata_json = json.dumps(metadata, indent=2, sort_keys=True)
+    metadata_json = write_metadata_sidecar(output, metadata)
 
     archive = {
         "frequencies_hz": np.asarray(frequencies_hz),
@@ -417,7 +428,6 @@ def save_and_plot(frequencies_hz: list[float], reference_mean: np.ndarray, signa
         if value is not None and isinstance(value, (bool, int, float, str)):
             archive[key] = value
     np.savez(output, **archive)
-    output.with_suffix(".json").write_text(metadata_json + "\n", encoding="utf-8")
     try:
         import matplotlib.pyplot as plt
     except ImportError as exc:
@@ -428,11 +438,7 @@ def save_and_plot(frequencies_hz: list[float], reference_mean: np.ndarray, signa
     fig, (ax_signal, ax_contrast) = plt.subplots(
         2, 1, sharex=True, layout="constrained", figsize=(8, 7),
     )
-    if not laser_enabled:
-        signal_label = "signal position (laser disabled)"
-    else:
-        signal_label = "signal (MW on)" if mw_enabled else "signal position (MW disabled)"
-    ax_signal.plot(frequency_ghz, signal, ".-", linewidth=0.8, markersize=3, label=signal_label)
+    ax_signal.plot(frequency_ghz, signal, ".-", linewidth=0.8, markersize=3, label="signal (MW on)")
     ax_signal.plot(frequency_ghz, reference, ".-", linewidth=0.8, markersize=3,
                    label="reference (MW off)", alpha=0.8)
     ax_signal.set(ylabel="mean ADC code", title="Signal and reference")
@@ -445,7 +451,7 @@ def save_and_plot(frequencies_hz: list[float], reference_mean: np.ndarray, signa
     ax_contrast.axhline(1.0, color="black", linewidth=0.8)
     ax_contrast.set(xlabel="MW frequency (GHz)", ylabel="signal / reference",
                     title=(f"Contrast: {samples_per_frequency} pairs/frequency, "
-                           f"{reference_mean.shape[0]} scans, {reset_pulses} reset pulses"))
+                           f"{reference_mean.shape[0]} scans, {preparation}"))
     ax_contrast.grid(True, alpha=0.3)
     fig.savefig(plot, dpi=160)
     plt.close(fig)
@@ -470,9 +476,12 @@ def main(argv=None):
     parser.add_argument("--readout-window-batches", type=int, default=DEFAULT_READOUT_WINDOW_BATCHES)
     parser.add_argument("--warmup-pairs", type=int, default=0,
                         help="discarded continuous pairs before recorded data at each frequency")
+    parser.add_argument("--preparation", choices=("continuous", "symmetric-reset"), default="continuous",
+                        help="continuous qd-style pair or matched reset trains before both shots")
     parser.add_argument("--reset-pulses", type=int, default=0,
-                        help=("unrecorded laser reset triggers between the MW-on signal and MW-off reference; "
-                              "0 retains the fast original sequence"))
+                        help="unrecorded reset triggers before each shot in symmetric-reset mode")
+    parser.add_argument("--post-reset-settle-batches", type=int, default=0,
+                        help="extra dark time after each reset train in symmetric-reset mode")
     parser.add_argument("--samples-per-frequency", type=int, default=DEFAULT_SAMPLES_PER_FREQUENCY)
     parser.add_argument("--averages", type=int, default=DEFAULT_AVERAGES)
     parser.add_argument("--port", type=int, default=9091)
@@ -492,7 +501,8 @@ def main(argv=None):
         laser_duration_batches=args.laser_duration_batches, readout_delay_batches=args.readout_delay_batches,
         readout_window_batches=args.readout_window_batches, warmup_pairs=args.warmup_pairs,
         samples_per_frequency=args.samples_per_frequency, averages=args.averages,
-        reset_pulses=args.reset_pulses, timeout_s=args.timeout_s,
+        preparation=args.preparation, reset_pulses=args.reset_pulses,
+        post_reset_settle_batches=args.post_reset_settle_batches, timeout_s=args.timeout_s,
     )
     acquisition_completed_at = datetime.now().astimezone().isoformat(timespec="seconds")
     save_and_plot(frequencies_hz, reference_mean, signal_mean, args.output, args.plot,
@@ -502,7 +512,8 @@ def main(argv=None):
                   readout_delay_batches=args.readout_delay_batches,
                   readout_window_batches=args.readout_window_batches,
                   warmup_pairs=args.warmup_pairs, samples_per_frequency=args.samples_per_frequency,
-                  reset_pulses=args.reset_pulses,
+                  reset_pulses=args.reset_pulses, preparation=args.preparation,
+                  post_reset_settle_batches=args.post_reset_settle_batches,
                   experiment_metadata={
                       "acquisition_started_at": acquisition_started_at,
                       "acquisition_completed_at": acquisition_completed_at,

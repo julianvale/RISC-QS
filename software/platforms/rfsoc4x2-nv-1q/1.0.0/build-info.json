@@ -1,0 +1,43 @@
+{
+  "schema": 1,
+  "platform": "rfsoc4x2-nv-1q",
+  "release": "1.0.0",
+  "role": "recommended known-good laser-capable RFSoC4x2 build",
+  "source": {
+    "repository_head": "b294c6da64fd8c769e6009c9b07ab504566667f3",
+    "build_name": "rfsoc4x2-nv-laser-1",
+    "build_config": "software/configs/rfsoc4x2-nv-1q.json",
+    "build_config_sha256": "3276b3706244fcd10fca4eb0da794a9b74789bc4a4732adb4b2a3a12c30c9749",
+    "with_laser_out": true,
+    "vivado_version": "2025.2",
+    "vivado_build": "6299465",
+    "board": "realdigital.org:rfsoc4x2:part0:1.0",
+    "device": "xczu48dr-ffvg1517-2"
+  },
+  "artifacts": {
+    "PulseTableSoc.bit": {
+      "bytes": 34437494,
+      "sha256": "36b9f1fe75d50f6af66d5dffe60d2167b22ada1c2ead86c5516fe8349c30d4d3"
+    },
+    "PulseTableSoc.hwh": {
+      "bytes": 577616,
+      "sha256": "1503d28e5a0c1056601bfa3fdd115156866c9079db538dda3997b99d99bc5f05",
+      "contains_io_laserOut_0": true
+    },
+    "rfsoc4x2-nv-1q.json": {
+      "bytes": 395,
+      "sha256": "bad1e52c9c8b1417bf57b879e3c817a0a8c44ed32a71c682a92b30c4eb1d7156",
+      "runtime_with_laser_out_present": false
+    }
+  },
+  "replaces": {
+    "reason": "promote the working laser-capable feature build as the main 1.0.0 release",
+    "PulseTableSoc.bit_sha256": "5ffe224d38a1ee5e4a1d5eee8fa0988644a8e37492bba4a45c9412fc815eff0f",
+    "PulseTableSoc.hwh_sha256": "d3eddfd06915e1b35d62bc44316092438758224842896143856898980b47e983"
+  },
+  "validation_scope": {
+    "runtime_params_parse": "validated during researcher-readiness handoff",
+    "board_deployment": "not repeated during researcher-readiness handoff",
+    "physical_rf_laser_optical": "not repeated during researcher-readiness handoff"
+  }
+}

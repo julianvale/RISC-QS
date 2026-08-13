@@ -25,6 +25,7 @@ from riscq.driver.remote import RemoteDriver
 from riscq.lang import Array, ParamTable, compile_kernel, kernel
 from riscq.map import READOUT_LEAD, READOUT_MAX_WIN_LOG2, SocMap, SocParams
 from riscq.pulses import units
+from software.quantum_sensing.nv_common import inclusive_linear_grid, s32
 from software.quantum_sensing.nv_pulsed_esr_halfmw import (
     DEFAULT_HALF_DURATION_BATCHES,
     DEFAULT_LASER_START_BATCHES,
@@ -35,7 +36,6 @@ from software.quantum_sensing.nv_pulsed_esr_halfmw import (
     LASER_HALF_PERIOD,
     MAX_PULSE_BATCHES,
     SCHEDULE_LEAD,
-    _s32,
     _tables,
 )
 
@@ -54,13 +54,7 @@ MAX_BLOCKS_PER_DURATION = 1_000
 
 
 def duration_grid_ns(start_ns: float, stop_ns: float, steps: int) -> list[float]:
-    if not all(math.isfinite(value) and value > 0 for value in (start_ns, stop_ns)):
-        raise ValueError("duration start and stop must be positive finite values")
-    if steps < 1:
-        raise ValueError("duration-steps must be positive")
-    if steps > 1 and stop_ns <= start_ns:
-        raise ValueError("duration-stop-ns must exceed duration-start-ns")
-    return [float(start_ns)] if steps == 1 else np.linspace(start_ns, stop_ns, steps).tolist()
+    return inclusive_linear_grid(start_ns, stop_ns, steps, name="duration")
 
 
 def duration_ns_to_batches(duration_ns: float) -> int:
@@ -284,8 +278,8 @@ def acquire_sweep(host: str, *, port: int = 9091,
                     params={0: {**shared, "mw_duration_batches": batches}},
                     results=["out"], timeout=max(1, math.ceil(timeout_s * 1000)),
                 )[0]["out"]
-                detuned_mean[average_index, duration_index] = _s32(int(result[0])) / samples_per_condition
-                resonant_mean[average_index, duration_index] = _s32(int(result[1])) / samples_per_condition
+                detuned_mean[average_index, duration_index] = s32(int(result[0])) / samples_per_condition
+                resonant_mean[average_index, duration_index] = s32(int(result[1])) / samples_per_condition
         return m, requested_ns, actual_ns, duration_batches, detuned_mean, resonant_mean
     finally:
         drv.close()

@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import numpy as np
 
 from riscq.map import SocMap, SocParams
@@ -8,7 +10,9 @@ from software.quantum_sensing.rfsoc4x2_aom_am import (CARRIER_HZ, ENV_LINES, LOW
 
 
 def _map():
-    return SocMap(SocParams.load("software/configs/rfsoc4x2-nv-1q.json"))
+    params = (Path(__file__).resolve().parents[1] / "platforms" /
+              "rfsoc4x2-nv-1q" / "1.0.0" / "rfsoc4x2-nv-1q.json")
+    return SocMap(SocParams.load(params))
 
 
 def test_aom_am_uses_full_readout_loop_and_realized_frequency():

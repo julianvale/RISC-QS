@@ -16,7 +16,7 @@ from software.quantum_sensing.nv_pulsed_esr_halfmw import (
     MAX_RESET_PULSES,
     _validate,
     build_program,
-    build_reset_program,
+    build_symmetric_reset_program,
     frequency_grid,
     save_and_plot,
     summarize_runs,
@@ -57,7 +57,17 @@ def test_validation_rejects_invalid_event_geometry_and_excessive_train_length():
                   DEFAULT_SAMPLES_PER_FREQUENCY + 1, 1)
     with pytest.raises(ValueError, match="reset-pulses"):
         _validate(m, [2.87e9], 1.0, 492, 375, 30, 77, 23, 0, 1, 1,
-                  MAX_RESET_PULSES + 1)
+                  preparation="symmetric-reset", reset_pulses=MAX_RESET_PULSES + 1)
+    with pytest.raises(ValueError, match="requires preparation"):
+        _validate(m, [2.87e9], 1.0, 492, 375, 30, 77, 23, 0, 1, 1,
+                  reset_pulses=1)
+
+
+def test_symmetric_reset_preparation_accepts_matched_reset_parameters():
+    _validate(
+        _map(), [2.87e9], 1.0, 492, 375, 30, 77, 23, 0, 1, 1,
+        preparation="symmetric-reset", reset_pulses=20, post_reset_settle_batches=492,
+    )
 
 
 def test_summary_matches_qdspectro_ratio_of_per_run_means():
@@ -113,10 +123,11 @@ def test_kernel_compiles_with_accumulators_and_rolling_queue_schedule():
     assert "group_start" not in program.c_source
 
 
-def test_reset_kernel_compiles_and_keeps_reset_pulses_unrecorded():
+def test_symmetric_reset_kernel_compiles_with_matched_preparation():
     if build.CC is None:
         pytest.skip("RISC-V LLVM toolchain is unavailable in this checkout")
-    program = build_reset_program(_map())
-    assert "reset_pulses" in program.params
-    assert "while (reset_index < reset_pulses)" in program.c_source
-    assert "reference_laser = reset_laser" in program.c_source
+    program = build_symmetric_reset_program(_map())
+    assert {"reset_pulses", "post_reset_settle_batches"} <= set(program.params)
+    assert program.c_source.count("while (reset_index < reset_pulses)") == 2
+    assert "signal_laser = reset_laser + post_reset_settle_batches" in program.c_source
+    assert "reference_laser = reset_laser + post_reset_settle_batches" in program.c_source

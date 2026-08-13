@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import time
 
 from riscq import run
 from riscq.driver.remote import RemoteDriver
@@ -22,7 +23,7 @@ ENV_LINES = 1024
 CARRIER_HZ = 80e6
 PULSE_BATCHES = 65500
 AMP_CODE = 7000
-AMP = 0.3
+AMP = AMP_CODE / units.AMP_SCALE
 SCHEDULE_LEAD = 2048
 
 
@@ -44,12 +45,12 @@ def readout_table(m) -> ParamTable:
 def k_aom(ro: ParamTable, out: Array, duration: int):
     """Fire the unmodulated AOM pulse and return [scheduled_start, duration_batches]."""
     init_pulse_params(ro.pulses)
-    set_freq(ro, ro.freq) # initialize the 80 MHz carrier explicitly
+    set_freq(ro, ro.freq)  # initialize the 80 MHz carrier explicitly
     set_start(ro, now())
     # The constant 1024-line envelope wraps during the longer pulse without modulation.
     set_dur(ro, ro["aom"], duration << 16)
-    start = now() + SCHEDULE_LEAD  
-    play(ro, ro["aom"], start) 
+    start = now() + SCHEDULE_LEAD
+    play(ro, ro["aom"], start)
     wait_until(start + duration + READOUT_LEAD)
     out[0] = start
     out[1] = duration
@@ -81,9 +82,18 @@ def main(argv=None):
     parser.add_argument("--host", required=True)
     parser.add_argument("--port", type=int, default=9091)
     parser.add_argument("--timeout-s", type=float, default=2.0)
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="number of host-triggered bursts; defaults to one")
+    parser.add_argument("--repeat-delay-s", type=float, default=0.001)
     args = parser.parse_args(argv)
-    result = run_aom(args.host, args.port, args.timeout_s)
-    print(f"carrier={CARRIER_HZ:g} Hz amplitude_code={AMP_CODE} result={result.tolist()}")
+    if args.repeat < 1 or args.repeat_delay_s < 0:
+        parser.error("repeat must be positive and repeat-delay-s must be non-negative")
+    for index in range(args.repeat):
+        result = run_aom(args.host, args.port, args.timeout_s)
+        print(f"burst {index + 1}/{args.repeat}: carrier={CARRIER_HZ:g} Hz "
+              f"amplitude_code={AMP_CODE} result={result.tolist()}")
+        if index + 1 < args.repeat:
+            time.sleep(args.repeat_delay_s)
 
 
 if __name__ == "__main__":

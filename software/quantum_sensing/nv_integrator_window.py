@@ -24,6 +24,7 @@ from riscq.driver.remote import RemoteDriver
 from riscq.lang import Array, ParamTable, compile_kernel, kernel
 from riscq.map import READOUT_LEAD, READOUT_MAX_WIN_LOG2, SocMap, SocParams
 from riscq.pulses import Pulse, envelopes
+from software.quantum_sensing.nv_common import s32, write_metadata_sidecar
 
 
 SCHEDULE_LEAD = 2_048
@@ -82,11 +83,6 @@ def _validate(m: SocMap, offsets: list[int], durations: list[int], laser_delay_b
         raise ValueError("pairs must be at least 2 to estimate repeatability")
 
 
-def _s32(value: int) -> int:
-    value &= 0xFFFF_FFFF
-    return value - (1 << 32) if value & (1 << 31) else value
-
-
 def summarize_differences(differences: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Return signed mean, sample standard deviation, and ``abs(mean)/std`` for a scan cube."""
     mean = differences.mean(axis=-1)
@@ -133,7 +129,7 @@ def acquire_scan(host: str, offsets: list[int], durations: list[int], port: int 
                             drv, m, {0: program}, params={0: {**candidate, "laser_on": laser_on}},
                             results=["out"], timeout=max(1, math.ceil(timeout_s * 1000)),
                         )[0]["out"]
-                        values.append(_s32(int(result[4])))
+                        values.append(s32(int(result[4])))
                     differences[oi, di, pair] = values[1] - values[0]
         return m, differences
     finally:
@@ -141,11 +137,26 @@ def acquire_scan(host: str, offsets: list[int], durations: list[int], port: int 
 
 
 def save_and_plot(m: SocMap, offsets: list[int], durations: list[int], differences: np.ndarray,
-                  output: Path, plot: Path) -> tuple[int, int]:
+                  output: Path, plot: Path, *, metadata: dict[str, object] | None = None) -> tuple[int, int]:
     """Save all paired results and a two-panel signed-response/SNR local scan plot."""
     mean, std, snr = summarize_differences(differences)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    run_metadata = {
+        "schema_version": 1,
+        "experiment": "nv_integrator_window",
+        "output_file": str(output),
+        "plot_file": str(plot),
+        "dsp_freq_hz": float(m.params.dsp_freq_hz),
+        "offsets_batches": offsets,
+        "durations_batches": durations,
+        "pairs": int(differences.shape[-1]),
+    }
+    if metadata is not None:
+        run_metadata.update(metadata)
+    metadata_json = write_metadata_sidecar(output, run_metadata)
     np.savez(output, offsets_batches=np.asarray(offsets), durations_batches=np.asarray(durations),
-             differences=differences, mean=mean, std=std, snr=snr, dsp_freq_hz=m.params.dsp_freq_hz)
+             differences=differences, mean=mean, std=std, snr=snr, dsp_freq_hz=m.params.dsp_freq_hz,
+             experiment_metadata_json=metadata_json)
     # A perfectly repeatable zero response has std=0 everywhere, so every SNR
     # is undefined; still save and plot that useful null result without failing.
     best = _best_index(snr)
@@ -230,7 +241,16 @@ def main(argv=None):
     m, differences = acquire_scan(args.host, offsets, durations, args.port,
                                   args.laser_delay_batches, args.laser_duration_batches,
                                   args.pairs, args.timeout_s)
-    offset, duration = save_and_plot(m, offsets, durations, differences, args.output, args.plot)
+    offset, duration = save_and_plot(
+        m, offsets, durations, differences, args.output, args.plot,
+        metadata={
+            "host": args.host,
+            "port": args.port,
+            "laser_delay_batches": args.laser_delay_batches,
+            "laser_duration_batches": args.laser_duration_batches,
+            "timeout_s": args.timeout_s,
+        },
+    )
     print(f"saved local integrator scan to {args.output} and {args.plot}; "
           f"best measured SNR at offset={offset}, duration={duration} DSP batches")
 

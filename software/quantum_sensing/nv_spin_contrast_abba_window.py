@@ -15,7 +15,7 @@ from riscq import run
 from riscq.driver.remote import RemoteDriver
 from riscq.map import READOUT_MAX_WIN_LOG2, SocMap, SocParams
 from riscq.pulses import units
-from software.quantum_sensing.nv_pulsed_esr_halfmw import _s32
+from software.quantum_sensing.nv_common import s32
 from software.quantum_sensing.nv_pulsed_rabi_abba import (
     DEFAULT_AVERAGES,
     DEFAULT_BLOCKS_PER_DURATION,
@@ -154,10 +154,10 @@ def acquire_scan(host: str, *, port: int = 9091,
                         results=["out"], timeout=max(1, math.ceil(timeout_s * 1000)),
                     )[0]["out"]
                     detuned_mean[average_index, delay_index, window_index] = (
-                        _s32(int(result[0])) / samples_per_condition
+                        s32(int(result[0])) / samples_per_condition
                     )
                     resonant_mean[average_index, delay_index, window_index] = (
-                        _s32(int(result[1])) / samples_per_condition
+                        s32(int(result[1])) / samples_per_condition
                     )
         return m, delays, windows, mw_duration_batches, detuned_mean, resonant_mean
     finally:

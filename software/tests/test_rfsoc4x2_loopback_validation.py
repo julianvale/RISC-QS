@@ -11,7 +11,8 @@ from riscq.map import SocMap, SocParams
 
 REPO = Path(__file__).resolve().parents[2]
 SOURCE = REPO / "software" / "fw" / "rfsoc4x2_loopback_validation.c"
-PARAMS = REPO / "software" / "configs" / "rfsoc4x2-nv-1q.json"
+PARAMS = (REPO / "software" / "platforms" / "rfsoc4x2-nv-1q" / "1.0.0" /
+          "rfsoc4x2-nv-1q.json")
 
 
 @pytest.fixture

@@ -19,6 +19,8 @@ from riscq.map import READOUT_LEAD, SocMap, SocParams, pack16
 from riscq.pulses import Pulse, envelopes, units
 from typing import no_type_check
 
+from software.quantum_sensing.nv_common import s32
+
 
 MODE_NAMES = ("matched", "no-dac", "detuned")
 DAC_CODE = 667
@@ -30,11 +32,6 @@ DAC_DUR = 2458
 DEMOD_DUR = 4096
 SCHEDULE_LEAD = 2048
 DEMOD_EARLY = 256
-
-
-def _s32(value: int) -> int:
-    value &= 0xFFFFFFFF
-    return value - 0x100000000 if value & 0x80000000 else value
 
 
 def _tables(m):
@@ -115,7 +112,7 @@ def run_loopback(host: str, port: int = 9091, timeout_s: float = 2.0):
                 drv, m, {0: program}, params={0: {"mode": mode}},
                 results=["out"], timeout=max(1, math.ceil(timeout_s * 1000)),
             )[0]["out"].astype(np.int64)
-            values = [_s32(int(value)) for value in result]
+            values = [s32(int(value)) for value in result]
             magnitude = math.hypot(values[6], values[7])
             expected_code = DETUNED_CODE if mode == 2 else MATCHED_CODE
             if values[0] != mode or values[1] != 0x354C4200 + mode:

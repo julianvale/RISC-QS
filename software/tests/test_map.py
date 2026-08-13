@@ -6,10 +6,14 @@ from pathlib import Path
 from riscq.map import MEM_BASE, SocMap, SocParams, pack16
 
 CONFIGS = Path(__file__).resolve().parents[1] / "configs"
+PLATFORMS = Path(__file__).resolve().parents[1] / "platforms"
 
 
 def _map(name: str) -> SocMap:
-    return SocMap(SocParams.load(CONFIGS / f"{name}.json"))
+    path = CONFIGS / f"{name}.json"
+    if name == "rfsoc4x2-nv-1q":
+        path = PLATFORMS / name / "1.0.0" / f"{name}.json"
+    return SocMap(SocParams.load(path))
 
 
 def test_pack16_seats_field_at_bit16():
