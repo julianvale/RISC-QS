@@ -70,8 +70,6 @@ The release directory is `software/platforms/rfsoc4x2-nv-1q/1.0.0`. It contains 
 bitstream and HWH file. It also contains a runtime parameter file. The runtime file does **not**
 contain `with_laser_out`. The file `build-info.json` records the release artifacts.
 
-The directory README contains historical information. Do not use it as the deployment procedure.
-
 Verify the release files. Then create a new local bundle:
 
 ```bash
