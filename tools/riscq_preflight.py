@@ -39,13 +39,23 @@ def command_output(*args: str) -> tuple[bool, str]:
     return result.returncode == 0, result.stdout.strip()
 
 
-def submodule_check(report: Report) -> None:
+def submodule_check(report: Report, *, required: bool) -> None:
     ok, output = command_output("git", "submodule", "status", "--recursive")
-    report.check(ok, "git submodule metadata", output if not ok else "recursive status available")
+    report.check(
+        ok,
+        "git submodule metadata",
+        output if not ok else "recursive status available",
+        required=required,
+    )
     if not ok:
         return
     bad = [line for line in output.splitlines() if line.startswith(("-", "+", "U"))]
-    report.check(not bad, "submodules initialized at recorded commits", "; ".join(bad))
+    report.check(
+        not bad,
+        "submodules initialized at recorded commits",
+        "; ".join(bad),
+        required=required,
+    )
 
 
 def tool_check(report: Report, command: str, *, required: bool) -> None:
@@ -69,7 +79,7 @@ def main(argv: list[str] | None = None) -> int:
     report.check(sys.version_info >= (3, 10), "Python >= 3.10", sys.version.split()[0])
     report.check((REPO / ".git").exists(), "repository root", str(REPO))
     tool_check(report, "git", required=True)
-    submodule_check(report)
+    submodule_check(report, required=args.require_hardware)
 
     for module in PYTHON_IMPORTS:
         report.check(
