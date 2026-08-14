@@ -193,5 +193,5 @@ reference, keeping the framework honest against the real RTL.
 
 ## RFSoC4x2 addition
 
-The RFSoC4x2 uses the same board server and remote driver as the ZCU216. Its board files and service
-setup are documented in [RFSoC4x2 deployment](rfsoc4x2-deployment.md).
+The RFSoC4x2 uses the same board server and remote driver as the ZCU216. See the
+[RFSoC4x2 quick start](../../README.md) for board setup and service installation.

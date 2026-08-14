@@ -15,8 +15,4 @@ sha256sum -c SHA256SUMS
 
 Runtime order is LMK 245.76 MHz, LMX 491.52 MHz, HWH range and RFDC-driver validation, overlay
 download, then the normal board server. The run layer keeps reset asserted until a fully read-back
-program is ready. Deployment instructions are in
-[`docs/software/rfsoc4x2-deployment.md`](../../../../docs/software/rfsoc4x2-deployment.md).
-
-`PulseTableSoc.ltx` is intentionally not included. It is an observation-only Vivado debug artifact,
-not part of the PYNQ runtime overlay.
+program is ready. Use the [RFSoC4x2 quick start](../../../../README.md) for deployment.

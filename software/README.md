@@ -47,8 +47,7 @@ An RFSoC4x2 bundle contains `top.bit`, `top.hwh`, and `params.json`. Upload it w
 `riscq.driver.remote.upload_rfsoc4x2_bundle`. The `params.json` platform name must be
 `rfsoc4x2-nv-1q`.
 
-See [RFSoC4x2 deployment](../docs/software/rfsoc4x2-deployment.md) for board installation and
-service setup.
+See the [RFSoC4x2 quick start](../README.md) for board installation and service setup.
 
 ## Tests
 

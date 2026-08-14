@@ -2,8 +2,7 @@
 
 Module reference for **riscq** — an analog signal-processing SoC in SpinalHDL: one or more RISC-V
 control processors driving hardware that generates and decodes analog signals, on a Xilinx UltraScale+
-RFSoC (`xczu49dr`, ZCU216). For the project overview and working conventions, start with the top-level
-[`CLAUDE.md`](../CLAUDE.md).
+RFSoC (`xczu49dr`, ZCU216).
 
 Each page below documents one module/component/plugin — what it is for, where it fits, the design
 rationale and contracts, the interface, how to build/simulate it, and how it is verified. Read the
@@ -126,4 +125,4 @@ with the [software framework overview](software/README.md).**
 | [05 — remote](software/05-remote.md) | Pyro5 server / proxy |
 | [06 — co-sim](software/06-cosim.md) | cocotb backend + qutip ADC injection |
 | [board server](software/board-server.md) | Running riscq on the ZCU216: offline install, bundles, `riscq-board-server`, `RemoteDriver` |
-| [RFSoC4x2 deployment](software/rfsoc4x2-deployment.md) | RFSoC4x2 wheel, bundle, and service installation |
+| [RFSoC4x2 quick start](../README.md) | RFSoC4x2 host setup, release packaging, board service, and rebuild procedure |
