@@ -3,6 +3,11 @@
 These programs target the `rfsoc4x2-nv-1q` platform. Use the four maintained
 experiments for measurements. Use the other programs to verify the setup.
 
+Start with the loopback program with an SMA cable connecting DACA to ADCA directly. Verify that the
+reported magnitude is reasonable (should be ~100k or more). A null result can be in the ~1000 range. 
+
+Use `rfsoc4x2_am.py` and `rfsoc4x2_laser_test.py` to verify analog and digital output respectively on a scope.
+
 ## Hardware limits
 
 The platform DSP clock is 491.52 MHz. One DSP batch is 2.0345 ns. Express all
@@ -154,6 +159,25 @@ you interpret data.
 
 Run `<program>.py --help` for the current arguments and defaults.
 
+## Physical Setup
+### Microwave antenna setup
+  1. Connect the chosen amplifier output (tested with ZHL-16W-43-S+) to the antenna with a microwave circulator to prevent reflections from the potentially poorly matched antenna. 
+  2. Connect DACA to amplifier input via SMA.
+  3. Power amplifier
+### Digital Laser trigger
+  1. Connect the PMOD adapter to the PMOD pins at the bottom right of the board (using the text on the screen as a reference).
+     The active pin is the top right when facing the PMOD port directly. The connector should have its plastic protrusion facing up.
+  2. Connect the PMOD adapter to the NPL52B trigger input via SMA. Make sure the laser is set to user trigger mode.
+### Readout
+  1. Connect RFout port of photodiode to ADCA on board via SMA. 
+### AOM setup
+This one is kind of complicated. Make sure you verify the power you're sending through everything first. The full scale power output of DACB was measured to be ~-2 dBM
+  1. Connect the larger amplifier output (ZHL-03-5WF+) to the AOM.
+  2. Add 9 dB attenuation to the input of the ZHL-03-5WF+.
+  3. Connect the output of the smaller amplifier (ZX60-3018G-S+) to the 9 dB attenuators.
+  4. Connect the input of the ZX60-3018G-S+ to DACB, with 1 dB attenuation in between. 
+  5. Power amplifiers
+
 ## Miscellaneous
 ### Safety
  - Terminate analog outputs to 50 Ohm before generating pulses or powering amplifiers
@@ -164,4 +188,9 @@ Run `<program>.py --help` for the current arguments and defaults.
 ### Troubleshooting
  - ssh onto the board with `ssh xilinx@192.168.2.99`
  - If ssh is unavailable/timing out, use the USB interface, and start a screen session to communicate over UART: `sudo screen /dev/ttyUSB1 115200`. It might
-  be under a different device. 
+  be under a different device. This might not be as simple if using WSL. 
+
+### Notes
+  - The laser trigger is very sensitive, so every time I tried triggering the laser, it would trigger twice, once on the rising edge, and then again on the recovery from the falling edge.
+    Might want to investigate putting a resistor/voltage divider on the PMOD output (would require some soldering). 
+  - Email me if you have any questions jvale@berkeley.edu.
