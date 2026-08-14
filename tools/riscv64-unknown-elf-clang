@@ -1,0 +1,3 @@
+#!/bin/sh
+
+exec clang --target=riscv32-unknown-elf -fuse-ld=lld "$@"

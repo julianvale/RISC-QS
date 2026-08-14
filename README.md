@@ -39,7 +39,22 @@ From the repository root, run the host-only checks:
 ```
 
 These checks do not validate an FPGA or physical I/O. The full Python suite compiles firmware. Add
-`riscv64-unknown-elf-clang` to `PATH` before you run that suite:
+the RISC-V compiler and binary utilities before you run that suite. On Ubuntu, install LLVM Clang,
+LLD, and the RISC-V GNU binary utilities:
+
+```bash
+sudo apt-get update
+sudo apt-get install clang lld binutils-riscv64-unknown-elf
+```
+
+The repository includes `tools/riscv64-unknown-elf-clang`. This wrapper configures stock Clang for
+the RV32 bare-metal target. Add the `tools` directory to `PATH` for the current shell:
+
+```bash
+export PATH="$PWD/tools:$PATH"
+```
+
+Run the firmware preflight. Then run the full Python suite:
 
 ```bash
 .venv/bin/python tools/riscq_preflight.py --require-firmware
